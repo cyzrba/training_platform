@@ -34,9 +34,7 @@ def sqlite_stats(db_file: Path) -> dict[str, int]:
                 "AND name NOT LIKE 'sqlite_%' AND name != 'alembic_version'"
             )
         ]
-        fk_count = sum(
-            len(conn.execute(f"PRAGMA foreign_key_list('{name}')").fetchall()) for name in tables
-        )
+        fk_count = sum(len(conn.execute(f"PRAGMA foreign_key_list('{name}')").fetchall()) for name in tables)
         return {
             "tables": len(tables),
             "indexes": query(

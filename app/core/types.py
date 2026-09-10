@@ -1,19 +1,19 @@
-"""SQLite 场景下的自定义列类型。
+"""SQLite 场景下的自定义列类型与时间工具。
 
 字段清单源自 PostgreSQL DDL，落到 SQLite 时有两处需要显式处理：
 1. ``timestamptz``：SQLite 无时区概念，用 TZDateTime 统一按 UTC 存取，读出来始终是 aware；
-2. ``jsonb``：SQLite 用 JSON（TEXT 存储），保留 JSONB 别名以便与字段清单表述对应。
+2. ``jsonb``：SQLModel 的 JSON 类型在 SQLite 中以 TEXT 存储。
 """
 
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Integer, TypeDecorator
-from sqlalchemy.types import TypeEngine
+from sqlmodel import DateTime, TypeDecorator
 
-# SQLite 只有 INTEGER PRIMARY KEY 才是 rowid 别名（可自增），
-# 因此主键统一用 Integer；其余 bigint 字段保留 BigInteger 语义（SQLite 内部同为 8 字节整数）。
-JSONB = JSON
+
+def utc_now() -> datetime:
+    """当前 UTC 时间，作为 created_at / updated_at 的 Python 侧默认值。"""
+    return datetime.now(UTC)
 
 
 class TZDateTime(TypeDecorator[datetime]):
@@ -22,7 +22,7 @@ class TZDateTime(TypeDecorator[datetime]):
     impl = DateTime
     cache_ok = True
 
-    def load_dialect_impl(self, dialect: Any) -> TypeEngine[Any]:
+    def load_dialect_impl(self, dialect: Any) -> Any:
         return dialect.type_descriptor(DateTime(timezone=False))
 
     def process_bind_param(self, value: datetime | None, _dialect: Any) -> datetime | None:
@@ -38,8 +38,3 @@ class TZDateTime(TypeDecorator[datetime]):
         if value.tzinfo is None:
             return value.replace(tzinfo=UTC)
         return value.astimezone(UTC)
-
-
-def sqlite_pk() -> Integer:
-    """可自增主键列类型（SQLite 的 INTEGER PRIMARY KEY）。"""
-    return Integer()

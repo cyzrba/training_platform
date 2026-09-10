@@ -1,9 +1,12 @@
 """数据库引擎、会话与 PRAGMA 设置。"""
 
 from collections.abc import AsyncGenerator
+from typing import Any
 
-from sqlalchemy import event, text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import event
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
+from sqlmodel import text
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import settings
 
@@ -13,16 +16,20 @@ def _ensure_sqlite_dir() -> None:
         settings.sqlite_file.parent.mkdir(parents=True, exist_ok=True)
 
 
-def create_engine(database_url: str | None = None, *, echo: bool = False) -> AsyncEngine:
+def create_engine(
+    database_url: str | None = None, *, echo: bool = False, poolclass: Any | None = None
+) -> AsyncEngine:
     """创建异步引擎，并为 SQLite 打开必需的外键约束与并发参数。"""
     url = database_url or settings.resolved_database_url
-    engine = create_async_engine(
-        url,
-        echo=echo,
-        future=True,
-        pool_pre_ping=True,
-        connect_args={"check_same_thread": False} if url.startswith("sqlite") else {},
-    )
+    options: dict[str, Any] = {
+        "echo": echo,
+        "future": True,
+        "pool_pre_ping": True,
+        "connect_args": {"check_same_thread": False} if url.startswith("sqlite") else {},
+    }
+    if poolclass is not None:
+        options["poolclass"] = poolclass
+    engine = create_async_engine(url, **options)
 
     if url.startswith("sqlite"):
 
@@ -41,7 +48,7 @@ def create_engine(database_url: str | None = None, *, echo: bool = False) -> Asy
 
 _ensure_sqlite_dir()
 
-engine: AsyncEngine = create_engine(echo=settings.sql_echo)
+engine = create_engine(echo=settings.sql_echo)
 SessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
 
@@ -56,7 +63,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def check_database() -> dict[str, object]:
-    """健康检查：连通性 + 已建表数量。"""
+    """健康检查：连通性 + 已建表数量（不含 alembic_version）。"""
     async with engine.connect() as conn:
         await conn.execute(text("SELECT 1"))
         result = await conn.execute(

@@ -1,9 +1,9 @@
-"""全部 ORM 模型（38 张表）。
+"""全部 ORM 表模型（38 张表）。
 
 导入本包即完成 Base.metadata 注册，Alembic 与建表脚本都依赖这里的汇总导入。
 """
 
-from app.models.a_account import (
+from app.models.account import (
     SysPermission,
     SysRole,
     SysRolePermission,
@@ -11,9 +11,17 @@ from app.models.a_account import (
     SysUser,
     SysUserRole,
 )
-from app.models.b_org import ClassGroup, ClassInfo, ClassStudent, ClassStudentGroup
-from app.models.base import Base, SoftDeleteMixin, TimestampMixin
-from app.models.c_job_skill import (
+from app.models.attempt import (
+    AttemptStage,
+    AttemptStageFile,
+    FileAsset,
+    ProjectSubmission,
+    StudentProject,
+    TrainingAttempt,
+)
+from app.models.base import Base, CreatedAtMixin, SoftDeleteMixin, TimestampMixin
+from app.models.certificate import StudentCertificate
+from app.models.job_skill import (
     GrowthRule,
     Job,
     JobSkill,
@@ -24,26 +32,17 @@ from app.models.c_job_skill import (
     StudentJob,
     StudentSkill,
 )
-from app.models.d_project import ProjectModule, ProjectStageTemplate, TrainingProject
-from app.models.e_attempt_review import (
-    AttemptStage,
-    AttemptStageFile,
-    FileAsset,
-    ProjectSubmission,
-    ReviewAiJob,
-    ReviewRecord,
-    StudentProject,
-    TrainingAttempt,
-)
-from app.models.f_certificate import StudentCertificate
-from app.models.h_ai_kb import (
+from app.models.knowledge import (
     AiQaCitation,
     AiQaMessage,
     AiQaSession,
     KnowledgeChunk,
     KnowledgeDoc,
 )
-from app.models.i_notify_audit import Notification, OperationLog
+from app.models.notification import Notification, OperationLog
+from app.models.organization import ClassGroup, ClassInfo, ClassStudent, ClassStudentGroup
+from app.models.project import ProjectModule, ProjectStageTemplate, TrainingProject
+from app.models.review import ReviewAiJob, ReviewRecord
 
 __all__ = [
     "AiQaCitation",
@@ -56,6 +55,7 @@ __all__ = [
     "ClassInfo",
     "ClassStudent",
     "ClassStudentGroup",
+    "CreatedAtMixin",
     "FileAsset",
     "GrowthRule",
     "Job",

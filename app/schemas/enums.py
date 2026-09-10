@@ -1,16 +1,16 @@
 """枚举字典接口的响应模型。"""
 
-from pydantic import BaseModel, Field
+from sqlmodel import Field, SQLModel
 
 from app.models.enums import ENUM_DICTS, ENUM_INDEX, EnumDict
 
 
-class EnumItemOut(BaseModel):
+class EnumItemOut(SQLModel):
     code: str = Field(description="落库 code")
     label: str = Field(description="中文文案")
 
 
-class EnumDictOut(BaseModel):
+class EnumDictOut(SQLModel):
     key: str = Field(description="枚举标识，如 user_type")
     title: str = Field(description="枚举名称")
     items: list[EnumItemOut]

@@ -7,11 +7,11 @@
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import SQLModel, select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.db import SessionLocal
-from app.models.a_account import (
+from app.models.account import (
     SysPermission,
     SysRole,
     SysRolePermission,
@@ -19,8 +19,8 @@ from app.models.a_account import (
     SysUser,
     SysUserRole,
 )
-from app.models.c_job_skill import GrowthRule, SkillTree
-from app.models.d_project import ProjectStageTemplate
+from app.models.job_skill import GrowthRule, SkillTree
+from app.models.project import ProjectStageTemplate
 
 ROLES: list[dict[str, str]] = [
     {"role_code": "STUDENT", "role_name": "学生"},
@@ -185,12 +185,16 @@ SYSTEM_CONFIGS: list[dict[str, Any]] = [
 
 
 async def _get_or_create(
-    session: AsyncSession, model: type, defaults: dict[str, Any], **keys: Any
+    session: AsyncSession,
+    model: type[SQLModel],
+    defaults: dict[str, Any],
+    **keys: Any,
 ) -> tuple[Any, bool]:
-    stmt = select(model)
+    """按 keys 查找，不存在则用 keys + defaults 创建（幂等）。"""
+    statement = select(model)
     for field, value in keys.items():
-        stmt = stmt.where(getattr(model, field) == value)
-    existing = (await session.execute(stmt)).scalar_one_or_none()
+        statement = statement.where(getattr(model, field) == value)
+    existing = (await session.exec(statement)).first()
     if existing is not None:
         return existing, False
     obj = model(**{**keys, **defaults})

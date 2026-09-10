@@ -1,34 +1,53 @@
-"""ORM 基类与公共 Mixin。"""
+"""SQLModel 表模型基类与公共 Mixin。"""
 
 from datetime import datetime
 
-from sqlalchemy import MetaData, func
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlmodel import Field, MetaData, SQLModel, func, text
 
 from app.core.naming import NAMING_CONVENTION
-from app.core.types import TZDateTime
+from app.core.types import TZDateTime, utc_now
 
 
-class Base(DeclarativeBase):
+class Base(SQLModel):
+    """所有表模型的基类：统一约束命名规范，保证迁移脚本稳定。"""
+
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
-class TimestampMixin:
-    """created_at / updated_at：库内默认 now()，更新时由 ORM 维护。"""
+class CreatedAtMixin(SQLModel):
+    """只有 created_at 的表（关系表、流水表）。"""
 
-    created_at: Mapped[datetime] = mapped_column(
-        TZDateTime, nullable=False, server_default=func.now(), comment="创建时间"
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        TZDateTime,
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-        comment="更新时间",
+    created_at: datetime = Field(
+        default_factory=utc_now,
+        sa_type=TZDateTime,
+        sa_column_kwargs={"server_default": text("CURRENT_TIMESTAMP"), "comment": "创建时间"},
     )
 
 
-class SoftDeleteMixin:
+class TimestampMixin(SQLModel):
+    """created_at + updated_at（主数据表）。"""
+
+    created_at: datetime = Field(
+        default_factory=utc_now,
+        sa_type=TZDateTime,
+        sa_column_kwargs={"server_default": text("CURRENT_TIMESTAMP"), "comment": "创建时间"},
+    )
+    updated_at: datetime = Field(
+        default_factory=utc_now,
+        sa_type=TZDateTime,
+        sa_column_kwargs={
+            "server_default": text("CURRENT_TIMESTAMP"),
+            "onupdate": func.now(),
+            "comment": "更新时间",
+        },
+    )
+
+
+class SoftDeleteMixin(SQLModel):
     """软删除标记，仅主数据表使用；流水 / 快照表不带该字段。"""
 
-    deleted_at: Mapped[datetime | None] = mapped_column(TZDateTime, comment="软删除时间")
+    deleted_at: datetime | None = Field(
+        default=None,
+        sa_type=TZDateTime,
+        sa_column_kwargs={"comment": "软删除时间（为空表示未删除）"},
+    )

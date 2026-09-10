@@ -1,4 +1,4 @@
-"""Pydantic Schema 汇总导出。"""
+"""Pydantic / SQLModel Schema 汇总导出。"""
 
 from app.schemas.base import (
     CreatedAtRead,
