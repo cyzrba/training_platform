@@ -2,9 +2,8 @@
 
 from datetime import datetime
 
-from sqlmodel import JSON, BigInteger, Field, Index, SQLModel, Text, text
+from sqlmodel import JSON, Field, Index, SQLModel
 
-from app.core.types import TZDateTime
 from app.models.base import Base, CreatedAtMixin
 
 # -------------------------------------------------------------------- 站内通知
@@ -13,14 +12,14 @@ from app.models.base import Base, CreatedAtMixin
 class NotificationBase(SQLModel):
     recipient_user_id: int = Field(foreign_key="sys_user.id", description="接收人 ID")
     title: str = Field(max_length=255, description="通知标题")
-    content: str | None = Field(default=None, sa_type=Text, description="通知内容")
+    content: str | None = Field(default=None, description="通知内容")
     biz_type: str | None = Field(
         default=None,
         max_length=50,
         description="REVIEW_RESULT / STAGE_RESULT / TASK_PUBLISH / CERT / POINT",
     )
-    biz_id: int | None = Field(default=None, sa_type=BigInteger, description="关联业务 ID")
-    read_at: datetime | None = Field(default=None, sa_type=TZDateTime, description="已读时间")
+    biz_id: int | None = Field(default=None, description="关联业务 ID")
+    read_at: datetime | None = Field(default=None, description="已读时间")
 
 
 class Notification(Base, CreatedAtMixin, NotificationBase, table=True):
@@ -40,13 +39,8 @@ class OperationLogBase(SQLModel):
     module: str = Field(max_length=50, description="业务模块，如 PROJECT / PUBLISH / REVIEW / CERT")
     action: str = Field(max_length=50, description="操作动作，如 CREATE / PUBLISH / WITHDRAW")
     target_type: str | None = Field(default=None, max_length=50, description="操作对象类型")
-    target_id: int | None = Field(default=None, sa_type=BigInteger, description="操作对象 ID")
-    detail_json: dict = Field(
-        default_factory=dict,
-        sa_type=JSON,
-        description="变更前后快照（JSON）",
-        sa_column_kwargs={"server_default": text("'{}'")},
-    )
+    target_id: int | None = Field(default=None, description="操作对象 ID")
+    detail_json: dict = Field(default_factory=dict, sa_type=JSON, description="变更前后快照（JSON）")
     ip: str | None = Field(default=None, max_length=45, description="客户端 IP")
     user_agent: str | None = Field(default=None, max_length=255, description="客户端 User-Agent")
 

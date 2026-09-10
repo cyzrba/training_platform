@@ -2,10 +2,10 @@
 
 from datetime import datetime
 
-from sqlmodel import Field, MetaData, SQLModel, func, text
+from sqlmodel import Field, MetaData, SQLModel
 
 from app.core.naming import NAMING_CONVENTION
-from app.core.types import TZDateTime, utc_now
+from app.core.time import utc_now
 
 
 class Base(SQLModel):
@@ -17,37 +17,17 @@ class Base(SQLModel):
 class CreatedAtMixin(SQLModel):
     """只有 created_at 的表（关系表、流水表）。"""
 
-    created_at: datetime = Field(
-        default_factory=utc_now,
-        sa_type=TZDateTime,
-        sa_column_kwargs={"server_default": text("CURRENT_TIMESTAMP"), "comment": "创建时间"},
-    )
+    created_at: datetime = Field(default_factory=utc_now, description="创建时间")
 
 
 class TimestampMixin(SQLModel):
-    """created_at + updated_at（主数据表）。"""
+    """created_at + updated_at（主数据表）；updated_at 由仓储层在更新时刷新。"""
 
-    created_at: datetime = Field(
-        default_factory=utc_now,
-        sa_type=TZDateTime,
-        sa_column_kwargs={"server_default": text("CURRENT_TIMESTAMP"), "comment": "创建时间"},
-    )
-    updated_at: datetime = Field(
-        default_factory=utc_now,
-        sa_type=TZDateTime,
-        sa_column_kwargs={
-            "server_default": text("CURRENT_TIMESTAMP"),
-            "onupdate": func.now(),
-            "comment": "更新时间",
-        },
-    )
+    created_at: datetime = Field(default_factory=utc_now, description="创建时间")
+    updated_at: datetime = Field(default_factory=utc_now, description="更新时间")
 
 
 class SoftDeleteMixin(SQLModel):
     """软删除标记，仅主数据表使用；流水 / 快照表不带该字段。"""
 
-    deleted_at: datetime | None = Field(
-        default=None,
-        sa_type=TZDateTime,
-        sa_column_kwargs={"comment": "软删除时间（为空表示未删除）"},
-    )
+    deleted_at: datetime | None = Field(default=None, description="软删除时间（为空表示未删除）")

@@ -4,18 +4,14 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlmodel import (
-    BigInteger,
     Field,
     Index,
-    Numeric,
-    SmallInteger,
     SQLModel,
-    Text,
     UniqueConstraint,
     text,
 )
 
-from app.core.types import TZDateTime, utc_now
+from app.core.time import utc_now
 from app.models.base import Base, CreatedAtMixin, TimestampMixin
 
 # --------------------------------------------------------------------- 文件
@@ -27,20 +23,10 @@ class FileAssetBase(SQLModel):
     object_key: str = Field(max_length=255, description="对象键")
     original_name: str = Field(max_length=255, description="原始文件名")
     content_type: str | None = Field(default=None, max_length=100, description="MIME 类型")
-    size_bytes: int = Field(
-        default=0,
-        sa_type=BigInteger,
-        description="文件大小（字节）",
-        sa_column_kwargs={"server_default": text("0")},
-    )
+    size_bytes: int = Field(default=0, description="文件大小（字节）")
     sha256: str | None = Field(default=None, max_length=64, description="文件摘要")
     biz_type: str = Field(max_length=30, description="SUBMISSION / AVATAR / CERT_PDF / IMPORT / REPORT")
-    status: str = Field(
-        default="ACTIVE",
-        max_length=20,
-        description="ACTIVE 可用 / INVALID 已失效",
-        sa_column_kwargs={"server_default": text("'ACTIVE'")},
-    )
+    status: str = Field(default="ACTIVE", max_length=20, description="ACTIVE 可用 / INVALID 已失效")
 
 
 class FileAsset(Base, CreatedAtMixin, FileAssetBase, table=True):
@@ -62,27 +48,14 @@ class StudentProjectBase(SQLModel):
         default="NOT_STARTED",
         max_length=20,
         description="NOT_STARTED / IN_PROGRESS / SUBMITTED / COMPLETED",
-        sa_column_kwargs={"server_default": text("'NOT_STARTED'")},
     )
-    progress: Decimal = Field(
-        default=Decimal("0"),
-        sa_type=Numeric(5, 2),
-        description="进度 0~100 = 已填写模块 ÷ 启用模块",
-        sa_column_kwargs={"server_default": text("0")},
-    )
-    total_score: Decimal | None = Field(default=None, sa_type=Numeric(5, 2), description="当前（最新）成绩")
-    best_score: Decimal | None = Field(default=None, sa_type=Numeric(5, 2), description="历史最高成绩")
-    attempt_count: int = Field(
-        default=0,
-        sa_type=SmallInteger,
-        description="闯关轮次数量",
-        sa_column_kwargs={"server_default": text("0")},
-    )
-    started_at: datetime | None = Field(default=None, sa_type=TZDateTime, description="开始时间")
-    completed_at: datetime | None = Field(default=None, sa_type=TZDateTime, description="完成时间")
-    completed_score: Decimal | None = Field(
-        default=None, sa_type=Numeric(5, 2), description="完成时的分数快照"
-    )
+    progress: Decimal = Field(default=Decimal(0), description="进度 0~100 = 已填写模块 ÷ 启用模块")
+    total_score: Decimal | None = Field(default=None, description="当前（最新）成绩")
+    best_score: Decimal | None = Field(default=None, description="历史最高成绩")
+    attempt_count: int = Field(default=0, description="闯关轮次数量")
+    started_at: datetime | None = Field(default=None, description="开始时间")
+    completed_at: datetime | None = Field(default=None, description="完成时间")
+    completed_score: Decimal | None = Field(default=None, description="完成时的分数快照")
 
 
 class StudentProject(Base, TimestampMixin, StudentProjectBase, table=True):
@@ -103,22 +76,16 @@ class StudentProject(Base, TimestampMixin, StudentProjectBase, table=True):
 
 class TrainingAttemptBase(SQLModel):
     student_project_id: int = Field(foreign_key="student_project.id", description="学生实训记录 ID")
-    attempt_no: int = Field(sa_type=SmallInteger, description="轮次序号")
+    attempt_no: int = Field(description="轮次序号")
     status: str = Field(
         default="IN_PROGRESS",
         max_length=20,
         description="IN_PROGRESS / SUBMITTED / COMPLETED / ABANDONED",
-        sa_column_kwargs={"server_default": text("'IN_PROGRESS'")},
     )
-    filled_stage_count: int = Field(
-        default=0,
-        sa_type=SmallInteger,
-        description="已填写模块数",
-        sa_column_kwargs={"server_default": text("0")},
-    )
-    submitted_at: datetime | None = Field(default=None, sa_type=TZDateTime, description="整单提交时间")
-    finished_at: datetime | None = Field(default=None, sa_type=TZDateTime, description="评审结束时间")
-    total_score: Decimal | None = Field(default=None, sa_type=Numeric(5, 2), description="本轮得分")
+    filled_stage_count: int = Field(default=0, description="已填写模块数")
+    submitted_at: datetime | None = Field(default=None, description="整单提交时间")
+    finished_at: datetime | None = Field(default=None, description="评审结束时间")
+    total_score: Decimal | None = Field(default=None, description="本轮得分")
 
 
 class TrainingAttempt(Base, TimestampMixin, TrainingAttemptBase, table=True):
@@ -139,13 +106,9 @@ class TrainingAttempt(Base, TimestampMixin, TrainingAttemptBase, table=True):
 class AttemptStageBase(SQLModel):
     attempt_id: int = Field(foreign_key="training_attempt.id", description="闯关轮次 ID")
     project_module_id: int = Field(foreign_key="project_module.id", description="项目模块 ID")
-    is_filled: bool = Field(
-        default=False,
-        description="该模块是否已填写完成",
-        sa_column_kwargs={"server_default": text("0")},
-    )
-    answer_text: str | None = Field(default=None, sa_type=Text, description="作答文本内容")
-    filled_at: datetime | None = Field(default=None, sa_type=TZDateTime, description="填写完成时间")
+    is_filled: bool = Field(default=False, description="该模块是否已填写完成")
+    answer_text: str | None = Field(default=None, description="作答文本内容")
+    filled_at: datetime | None = Field(default=None, description="填写完成时间")
 
 
 class AttemptStage(Base, TimestampMixin, AttemptStageBase, table=True):
@@ -179,7 +142,7 @@ class AttemptStageFile(Base, CreatedAtMixin, AttemptStageFileBase, table=True):
 
 class ProjectSubmissionBase(SQLModel):
     attempt_id: int = Field(foreign_key="training_attempt.id", description="闯关轮次 ID")
-    submit_no: int = Field(sa_type=SmallInteger, description="整单提交序号（从 1 递增）")
+    submit_no: int = Field(description="整单提交序号（从 1 递增）")
     status: str = Field(
         default="PENDING_AI",
         max_length=20,
@@ -187,26 +150,16 @@ class ProjectSubmissionBase(SQLModel):
             "PENDING_AI 待AI评审 / AI_PASSED / AI_FAILED / PENDING_REVIEW 待复审 / "
             "REVIEWING 复审中 / REVIEWED 已复审 / WITHDRAWN 已撤回"
         ),
-        sa_column_kwargs={"server_default": text("'PENDING_AI'")},
     )
     final_conclusion: str | None = Field(
         default=None, max_length=10, description="最终结论 PASS 通过 / FAIL 不通过"
     )
-    total_score: Decimal | None = Field(default=None, sa_type=Numeric(5, 2), description="本次提交总分 0~100")
+    total_score: Decimal | None = Field(default=None, description="本次提交总分 0~100")
     objection_reason: str | None = Field(default=None, max_length=500, description="学生对 AI 结果的异议说明")
-    is_starred: bool = Field(
-        default=False,
-        description="教师标星（标星后进入审核列表关注区）",
-        sa_column_kwargs={"server_default": text("0")},
-    )
-    submitted_at: datetime = Field(
-        default_factory=utc_now,
-        sa_type=TZDateTime,
-        description="整单提交时间",
-        sa_column_kwargs={"server_default": text("CURRENT_TIMESTAMP")},
-    )
-    withdrawn_at: datetime | None = Field(default=None, sa_type=TZDateTime, description="学生撤回时间")
-    reviewed_at: datetime | None = Field(default=None, sa_type=TZDateTime, description="评审完成时间")
+    is_starred: bool = Field(default=False, description="教师标星（标星后进入审核列表关注区）")
+    submitted_at: datetime = Field(default_factory=utc_now, description="整单提交时间")
+    withdrawn_at: datetime | None = Field(default=None, description="学生撤回时间")
+    reviewed_at: datetime | None = Field(default=None, description="评审完成时间")
 
 
 class ProjectSubmission(Base, TimestampMixin, ProjectSubmissionBase, table=True):

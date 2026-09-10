@@ -7,15 +7,11 @@ from sqlmodel import (
     JSON,
     Field,
     Index,
-    Numeric,
-    SmallInteger,
     SQLModel,
-    Text,
     UniqueConstraint,
     text,
 )
 
-from app.core.types import TZDateTime
 from app.models.base import Base, CreatedAtMixin
 
 # ------------------------------------------------------------------ 评审记录
@@ -24,36 +20,18 @@ from app.models.base import Base, CreatedAtMixin
 class ReviewRecordBase(SQLModel):
     submission_id: int = Field(foreign_key="project_submission.id", description="整单提交 ID")
     review_kind: str = Field(max_length=20, description="评审类型 AI 自动评审 / TEACHER 教师复审")
-    version_no: int = Field(
-        default=1,
-        sa_type=SmallInteger,
-        description="版本号",
-        sa_column_kwargs={"server_default": text("1")},
-    )
-    status: str = Field(
-        default="DRAFT",
-        max_length=20,
-        description="DRAFT 草稿 / FINAL 最终",
-        sa_column_kwargs={"server_default": text("'DRAFT'")},
-    )
+    version_no: int = Field(default=1, description="版本号")
+    status: str = Field(default="DRAFT", max_length=20, description="DRAFT 草稿 / FINAL 最终")
     reviewer_id: int | None = Field(default=None, foreign_key="sys_user.id", description="教师 ID；AI 为空")
-    total_score: Decimal | None = Field(default=None, sa_type=Numeric(5, 2), description="本次评审总分 0~100")
+    total_score: Decimal | None = Field(default=None, description="本次评审总分 0~100")
     conclusion: str | None = Field(default=None, max_length=10, description="PASS / FAIL")
-    comment: str | None = Field(default=None, sa_type=Text, description="评语/批注")
+    comment: str | None = Field(default=None, description="评语/批注")
     dimension_json: list = Field(
-        default_factory=list,
-        sa_type=JSON,
-        description="各维度得分与理由（JSON 数组）",
-        sa_column_kwargs={"server_default": text("'[]'")},
+        default_factory=list, sa_type=JSON, description="各维度得分与理由（JSON 数组）"
     )
     ai_model: str | None = Field(default=None, max_length=100, description="AI 模型名称")
-    raw_json: dict = Field(
-        default_factory=dict,
-        sa_type=JSON,
-        description="AI 原始返回快照",
-        sa_column_kwargs={"server_default": text("'{}'")},
-    )
-    finished_at: datetime | None = Field(default=None, sa_type=TZDateTime, description="结束时间")
+    raw_json: dict = Field(default_factory=dict, sa_type=JSON, description="AI 原始返回快照")
+    finished_at: datetime | None = Field(default=None, description="结束时间")
 
 
 class ReviewRecord(Base, CreatedAtMixin, ReviewRecordBase, table=True):
@@ -77,18 +55,12 @@ class ReviewAiJobBase(SQLModel):
         default="QUEUED",
         max_length=20,
         description="QUEUED 排队 / PROCESSING 处理中 / SUCCEED 成功 / FAILED 失败",
-        sa_column_kwargs={"server_default": text("'QUEUED'")},
     )
     model_name: str | None = Field(default=None, max_length=100, description="执行批阅的 AI 模型")
     request_id: str | None = Field(default=None, max_length=100, description="AI 服务请求 ID")
-    error_msg: str | None = Field(default=None, sa_type=Text, description="错误信息")
-    attempt_count: int = Field(
-        default=0,
-        sa_type=SmallInteger,
-        description="已尝试次数（用于重试与对账）",
-        sa_column_kwargs={"server_default": text("0")},
-    )
-    finished_at: datetime | None = Field(default=None, sa_type=TZDateTime, description="结束时间")
+    error_msg: str | None = Field(default=None, description="错误信息")
+    attempt_count: int = Field(default=0, description="已尝试次数（用于重试与对账）")
+    finished_at: datetime | None = Field(default=None, description="结束时间")
 
 
 class ReviewAiJob(Base, CreatedAtMixin, ReviewAiJobBase, table=True):

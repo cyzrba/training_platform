@@ -5,7 +5,7 @@ from typing import Any
 from sqlmodel import func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.core.types import utc_now
+from app.core.time import utc_now
 from app.models.base import Base
 from app.schemas.base import Page, PageParams
 
@@ -74,6 +74,8 @@ class BaseRepository[ModelT: Base]:
     async def update(self, obj: ModelT, data: dict[str, Any]) -> ModelT:
         for field, value in data.items():
             setattr(obj, field, value)
+        if hasattr(obj, "updated_at"):
+            obj.updated_at = utc_now()  # type: ignore[attr-defined]
         await self.session.flush()
         await self.session.refresh(obj)
         return obj

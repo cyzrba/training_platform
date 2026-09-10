@@ -88,13 +88,15 @@ class SysUserRead(TimestampRead, SoftDeleteRead, SysUserBase): id: int  # 出参
 
 几条落地时的注意点：
 
-- **列类型**：需要 `TEXT / SMALLINT / NUMERIC(5,2) / JSON / DATETIME` 等精确类型时用 `sa_type=`；
-  例如 `description: str | None = Field(default=None, sa_type=Text)`。
-  `sa_type` 只写 `Numeric` 会丢精度，必须写 `Numeric(5, 2)` 这样的实例。
+- **列类型**：交给 SQLModel 按注解自动映射即可——`str→VARCHAR`、`int→INTEGER`、`Decimal→NUMERIC`、
+  `bool→BOOLEAN`、`datetime→DATETIME`、`date→DATE`。SQLite 不区分这些整数/字符串的宽度，不必写
+  `sa_type=Text/SmallInteger/Numeric(5,2)` 之类的精确声明。
+- **唯一例外是 JSON**：`dict` / `list` 没有默认映射，必须标注 `sa_type=JSON`（如 `review_record.dimension_json`）。
 - **命名约束**：复合唯一约束、CHECK、索引必须放在 `__table_args__` 里显式命名（`uk_* / chk_* / idx_*`），
   与 DDL 原文保持一致，`Field(unique=True)` 生成的名字不符合字段清单。
-- **字段说明**：统一用 Pydantic 的 `description=`（会进 OpenAPI），不用 `comment=` 写库注释——
-  SQLite 不支持列注释，写库也存不下来。
+- **默认值**：只用 Python 侧的 `default=` / `default_factory=`，不写库级 `server_default`。
+  `updated_at` 由仓储层在 `update()` 里刷新（见 `app/crud/base.py`），不依赖数据库的 ON UPDATE。
+- **字段说明**：统一用 Pydantic 的 `description=`（会进 OpenAPI），不写库注释——SQLite 也不支持列注释。
 - **不加 relationship**：多张表存在"两个外键指向同一张表"（如 `sys_user_role`、`skill_node_dependency`），
   显式声明关系容易踩到 SQLModel 自动生成关系的歧义问题；关联数据用显式 join / 二次查询获取，
   需要时再按 `sa_relationship_kwargs={"foreign_keys": ...}` 补声明。
@@ -108,9 +110,12 @@ class SysUserRead(TimestampRead, SoftDeleteRead, SysUserBase): id: int  # 出参
 | 原 DDL | 本项目做法 | 原因 |
 | --- | --- | --- |
 | `bigint ... IDENTITY` 主键 | `int` 主键（SQLite 的 `INTEGER PRIMARY KEY`） | 只有 `INTEGER PRIMARY KEY` 才是自增的 rowid 别名 |
-| `timestamptz` | `TZDateTime`：库内按 UTC naive 存储，读回带时区 | SQLite 无时区类型，避免时间语义漂移 |
-| `jsonb` | SQLModel / SQLAlchemy 的 `JSON`（TEXT 存储） | SQLite 无 JSONB |
-| `numeric(5,2)` | `Numeric(5,2)`（SQLite 内部为浮点） | 精度由 Pydantic 与业务层约束 |
+| `smallint` / `bigint` / `int` | 统一 `INTEGER` | SQLite 只有整数一种存储类，宽度无意义 |
+| `varchar(n)` / `text` | `VARCHAR(n)` 与 `VARCHAR`（由 `max_length` 决定） | SQLite 不校验长度，`TEXT` 与 `VARCHAR` 同族 |
+| `timestamptz` | `DATETIME`，全库统一存 **UTC 且不带时区标记** | SQLite 无时区类型；需要本地时间时在接口层转换 |
+| `jsonb` | `JSON`（TEXT 存储） | SQLite 无 JSONB |
+| `numeric(5,2)` | `NUMERIC`（SQLite 内部为浮点） | 精度由 Pydantic 约束与业务层保证 |
+| `server_default now()` 等库级默认值 | 只保留 Python 侧默认值 | 减少声明；写入统一走 ORM |
 | 表 / 列注释 | 字段 `description=` + 模型 docstring | SQLite 不支持注释 |
 | 外键 | 每个连接执行 `PRAGMA foreign_keys=ON` | SQLite 默认不校验外键 |
 | 并发 | `journal_mode=WAL`、`busy_timeout=5000` | 单写多读场景下减少锁冲突 |

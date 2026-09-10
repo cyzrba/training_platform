@@ -2,9 +2,9 @@
 
 from datetime import datetime
 
-from sqlmodel import Field, Index, SmallInteger, SQLModel, UniqueConstraint, text
+from sqlmodel import Field, Index, SQLModel, UniqueConstraint, text
 
-from app.core.types import TZDateTime, utc_now
+from app.core.time import utc_now
 from app.models.base import Base, SoftDeleteMixin, TimestampMixin
 
 # ------------------------------------------------------------------------- 班级
@@ -12,21 +12,11 @@ from app.models.base import Base, SoftDeleteMixin, TimestampMixin
 
 class ClassInfoBase(SQLModel):
     class_name: str = Field(max_length=100, description="班级名称")
-    grade_year: int | None = Field(default=None, sa_type=SmallInteger, description="届/年级")
+    grade_year: int | None = Field(default=None, description="届/年级")
     head_teacher_id: int | None = Field(default=None, foreign_key="sys_user.id", description="负责教师")
-    group_count: int = Field(
-        default=1,
-        sa_type=SmallInteger,
-        description="分组数量（列表展示冗余）",
-        sa_column_kwargs={"server_default": text("1")},
-    )
+    group_count: int = Field(default=1, description="分组数量（列表展示冗余）")
     remark: str | None = Field(default=None, max_length=255, description="备注")
-    status: str = Field(
-        default="ACTIVE",
-        max_length=20,
-        description="ACTIVE 在读 / ARCHIVED 归档",
-        sa_column_kwargs={"server_default": text("'ACTIVE'")},
-    )
+    status: str = Field(default="ACTIVE", max_length=20, description="ACTIVE 在读 / ARCHIVED 归档")
 
 
 class ClassInfo(Base, TimestampMixin, SoftDeleteMixin, ClassInfoBase, table=True):
@@ -43,7 +33,7 @@ class ClassInfo(Base, TimestampMixin, SoftDeleteMixin, ClassInfoBase, table=True
 
 class ClassGroupBase(SQLModel):
     class_id: int = Field(foreign_key="class_info.id", description="班级 ID")
-    group_no: int = Field(sa_type=SmallInteger, description="分组序号")
+    group_no: int = Field(description="分组序号")
     group_name: str = Field(max_length=50, description="分组名称")
 
 
@@ -65,21 +55,9 @@ class ClassGroup(Base, TimestampMixin, ClassGroupBase, table=True):
 class ClassStudentBase(SQLModel):
     class_id: int = Field(foreign_key="class_info.id", description="班级 ID")
     student_id: int = Field(foreign_key="sys_user.id", description="学生 ID")
-    status: str = Field(
-        default="ENROLLED",
-        max_length=20,
-        description="ENROLLED 在班 / LEFT 已离班",
-        sa_column_kwargs={"server_default": text("'ENROLLED'")},
-    )
-    enrolled_at: datetime = Field(
-        default_factory=utc_now,
-        sa_type=TZDateTime,
-        description="入班时间",
-        sa_column_kwargs={"server_default": text("CURRENT_TIMESTAMP")},
-    )
-    left_at: datetime | None = Field(
-        default=None, sa_type=TZDateTime, description="离班/转出时间（为空表示仍在班）"
-    )
+    status: str = Field(default="ENROLLED", max_length=20, description="ENROLLED 在班 / LEFT 已离班")
+    enrolled_at: datetime = Field(default_factory=utc_now, description="入班时间")
+    left_at: datetime | None = Field(default=None, description="离班/转出时间（为空表示仍在班）")
 
 
 class ClassStudent(Base, TimestampMixin, ClassStudentBase, table=True):
@@ -106,12 +84,7 @@ class ClassStudent(Base, TimestampMixin, ClassStudentBase, table=True):
 class ClassStudentGroupBase(SQLModel):
     class_student_id: int = Field(foreign_key="class_student.id", unique=True, description="在班记录 ID")
     group_id: int = Field(foreign_key="class_group.id", description="分组 ID")
-    assigned_at: datetime = Field(
-        default_factory=utc_now,
-        sa_type=TZDateTime,
-        description="分配时间",
-        sa_column_kwargs={"server_default": text("CURRENT_TIMESTAMP")},
-    )
+    assigned_at: datetime = Field(default_factory=utc_now, description="分配时间")
     assigned_by: int | None = Field(default=None, foreign_key="sys_user.id", description="分配人 ID")
 
 

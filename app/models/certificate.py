@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from sqlmodel import Date, Field, Index, SQLModel, UniqueConstraint, text
+from sqlmodel import Field, Index, SQLModel, UniqueConstraint
 
 from app.models.base import Base, TimestampMixin
 
@@ -13,18 +13,12 @@ class StudentCertificateBase(SQLModel):
     certificate_no: str = Field(max_length=64, description="证书编号（唯一）")
     cert_name: str = Field(max_length=100, description="证书名称快照")
     issue_org_name: str | None = Field(default=None, max_length=150, description="认证机构快照")
-    issue_date: date = Field(
-        default_factory=date.today,
-        sa_type=Date,
-        description="发放日期",
-        sa_column_kwargs={"server_default": text("CURRENT_DATE")},
-    )
-    expire_date: date | None = Field(default=None, sa_type=Date, description="有效期至")
+    issue_date: date = Field(default_factory=date.today, description="发放日期")
+    expire_date: date | None = Field(default=None, description="有效期至")
     status: str = Field(
         default="VALID",
         max_length=20,
         description="VALID 有效 / EXPIRED 过期 / REVOKED 作废 / RESSUED 已补发",
-        sa_column_kwargs={"server_default": text("'VALID'")},
     )
     issued_by: int | None = Field(default=None, foreign_key="sys_user.id", description="发放人 ID")
     file_asset_id: int | None = Field(default=None, foreign_key="file_asset.id", description="电子证书文件")

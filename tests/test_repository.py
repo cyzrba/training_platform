@@ -28,7 +28,7 @@ async def test_create_read_and_soft_delete(db_session) -> None:
     )
     assert user.id is not None
     assert user.status == "ACTIVE"  # 默认值生效
-    assert user.created_at.tzinfo is not None  # TZDateTime 读回为 aware
+    assert user.created_at is not None  # 时间戳按 UTC 存库
 
     fetched = await repo.get(user.id)
     assert fetched is not None and fetched.user_no == "2026001"

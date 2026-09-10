@@ -5,19 +5,15 @@ from decimal import Decimal
 
 from sqlmodel import (
     JSON,
-    BigInteger,
     CheckConstraint,
     Field,
     Index,
-    Numeric,
-    SmallInteger,
     SQLModel,
-    Text,
     UniqueConstraint,
     text,
 )
 
-from app.core.types import TZDateTime, utc_now
+from app.core.time import utc_now
 from app.models.base import Base, CreatedAtMixin, SoftDeleteMixin, TimestampMixin
 
 # ------------------------------------------------------------------------- 岗位
@@ -30,19 +26,9 @@ class JobBase(SQLModel):
         default=None, max_length=20, description="BASIC 基础 / ADVANCED 进阶 / EXPANDED 拓展"
     )
     scene: str | None = Field(default=None, max_length=100, description="适配实训场景")
-    description: str | None = Field(default=None, sa_type=Text, description="说明/描述")
-    heat: int = Field(
-        default=0,
-        sa_type=BigInteger,
-        description="热度（事件更新）",
-        sa_column_kwargs={"server_default": text("0")},
-    )
-    status: str = Field(
-        default="ENABLED",
-        max_length=20,
-        description="ENABLED 启用 / DISABLED 停用",
-        sa_column_kwargs={"server_default": text("'ENABLED'")},
-    )
+    description: str | None = Field(default=None, description="说明/描述")
+    heat: int = Field(default=0, description="热度（事件更新）")
+    status: str = Field(default="ENABLED", max_length=20, description="ENABLED 启用 / DISABLED 停用")
     created_by: int | None = Field(default=None, foreign_key="sys_user.id", description="创建人 ID")
 
 
@@ -64,18 +50,9 @@ class Job(Base, TimestampMixin, SoftDeleteMixin, JobBase, table=True):
 class StudentJobBase(SQLModel):
     student_id: int = Field(foreign_key="sys_user.id", description="学生 ID")
     job_id: int = Field(foreign_key="job.id", description="岗位 ID")
-    is_primary: bool = Field(
-        default=False,
-        description="是否当前主岗位（每名学生至多一个）",
-        sa_column_kwargs={"server_default": text("0")},
-    )
-    selected_at: datetime = Field(
-        default_factory=utc_now,
-        sa_type=TZDateTime,
-        description="选择时间",
-        sa_column_kwargs={"server_default": text("CURRENT_TIMESTAMP")},
-    )
-    switched_at: datetime | None = Field(default=None, sa_type=TZDateTime, description="切换时间")
+    is_primary: bool = Field(default=False, description="是否当前主岗位（每名学生至多一个）")
+    selected_at: datetime = Field(default_factory=utc_now, description="选择时间")
+    switched_at: datetime | None = Field(default=None, description="切换时间")
 
 
 class StudentJob(Base, TimestampMixin, StudentJobBase, table=True):
@@ -98,12 +75,7 @@ class SkillTreeBase(SQLModel):
     tree_code: str = Field(max_length=50, description="技能树编码")
     tree_name: str = Field(max_length=100, description="技能树名称")
     description: str | None = Field(default=None, max_length=255, description="说明/描述")
-    status: str = Field(
-        default="ENABLED",
-        max_length=20,
-        description="ENABLED / DISABLED",
-        sa_column_kwargs={"server_default": text("'ENABLED'")},
-    )
+    status: str = Field(default="ENABLED", max_length=20, description="ENABLED / DISABLED")
 
 
 class SkillTree(Base, TimestampMixin, SoftDeleteMixin, SkillTreeBase, table=True):
@@ -122,20 +94,12 @@ class SkillNodeBase(SQLModel):
     tree_id: int = Field(foreign_key="skill_tree.id", description="技能树 ID")
     node_code: str = Field(max_length=50, description="技能节点编码")
     node_name: str = Field(max_length=100, description="技能节点名称")
-    description: str | None = Field(default=None, sa_type=Text, description="说明/描述")
+    description: str | None = Field(default=None, description="说明/描述")
     unlock_note: str | None = Field(default=None, max_length=255, description="给学生看的解锁说明")
     unlock_rule_json: dict = Field(
-        default_factory=dict,
-        sa_type=JSON,
-        description="未解锁提示用的规则；权威关系在 project_skill",
-        sa_column_kwargs={"server_default": text("'{}'")},
+        default_factory=dict, sa_type=JSON, description="未解锁提示用的规则；权威关系在 project_skill"
     )
-    status: str = Field(
-        default="ENABLED",
-        max_length=20,
-        description="ENABLED / DISABLED",
-        sa_column_kwargs={"server_default": text("'ENABLED'")},
-    )
+    status: str = Field(default="ENABLED", max_length=20, description="ENABLED / DISABLED")
 
 
 class SkillNode(Base, TimestampMixin, SoftDeleteMixin, SkillNodeBase, table=True):
@@ -180,22 +144,11 @@ class StudentSkillBase(SQLModel):
         default="LOCKED",
         max_length=20,
         description="LOCKED 未解锁 / ACTIVATED 已激活 / MASTERED 已精通",
-        sa_column_kwargs={"server_default": text("'LOCKED'")},
     )
-    level: int = Field(
-        default=0,
-        sa_type=SmallInteger,
-        description="熟练等级（预留：三态模式下可用 0/1/2）",
-        sa_column_kwargs={"server_default": text("0")},
-    )
-    progress: Decimal = Field(
-        default=Decimal("0"),
-        sa_type=Numeric(5, 2),
-        description="技能进度 0~100 = 完成数 ÷ 关联项目总数",
-        sa_column_kwargs={"server_default": text("0")},
-    )
-    activated_at: datetime | None = Field(default=None, sa_type=TZDateTime, description="点亮时间")
-    mastered_at: datetime | None = Field(default=None, sa_type=TZDateTime, description="精通时间")
+    level: int = Field(default=0, description="熟练等级（预留：三态模式下可用 0/1/2）")
+    progress: Decimal = Field(default=Decimal(0), description="技能进度 0~100 = 完成数 ÷ 关联项目总数")
+    activated_at: datetime | None = Field(default=None, description="点亮时间")
+    mastered_at: datetime | None = Field(default=None, description="精通时间")
     source: str | None = Field(default=None, max_length=30, description="进度来源 PROJECT / REVIEW / MANUAL")
 
 
@@ -236,28 +189,11 @@ class JobSkill(Base, CreatedAtMixin, JobSkillBase, table=True):
 
 class GrowthRuleBase(SQLModel):
     level_type: str = Field(max_length=20, description="实训层级 BASIC 基础 / ADVANCED 进阶 / EXPANDED 拓展")
-    unlock_condition_json: dict = Field(
-        default_factory=dict,
-        sa_type=JSON,
-        description="该层级的解锁条件",
-        sa_column_kwargs={"server_default": text("'{}'")},
-    )
-    skill_max_level: int = Field(
-        default=1,
-        sa_type=SmallInteger,
-        description="技能书最大等级",
-        sa_column_kwargs={"server_default": text("1")},
-    )
-    pass_score: Decimal = Field(
-        default=Decimal("60"),
-        sa_type=Numeric(5, 2),
-        description="该层级项目的完成及格线",
-        sa_column_kwargs={"server_default": text("60")},
-    )
-    level_description: str | None = Field(default=None, sa_type=Text, description="等级说明")
-    enabled: bool = Field(
-        default=True, description="该层级成长规则是否启用", sa_column_kwargs={"server_default": text("1")}
-    )
+    unlock_condition_json: dict = Field(default_factory=dict, sa_type=JSON, description="该层级的解锁条件")
+    skill_max_level: int = Field(default=1, description="技能书最大等级")
+    pass_score: Decimal = Field(default=Decimal(60), description="该层级项目的完成及格线")
+    level_description: str | None = Field(default=None, description="等级说明")
+    enabled: bool = Field(default=True, description="该层级成长规则是否启用")
     updated_by: int | None = Field(default=None, foreign_key="sys_user.id", description="最后修改人 ID")
 
 

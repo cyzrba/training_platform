@@ -1,11 +1,10 @@
 """账户与权限：用户、角色、权限点、系统配置。"""
 
 from datetime import datetime
-from typing import Any
 
-from sqlmodel import JSON, Field, Index, SQLModel, UniqueConstraint, func, text
+from sqlmodel import JSON, Field, Index, SQLModel, UniqueConstraint, text
 
-from app.core.types import TZDateTime, utc_now
+from app.core.time import utc_now
 from app.models.base import Base, CreatedAtMixin, SoftDeleteMixin, TimestampMixin
 
 # --------------------------------------------------------------------- 平台用户
@@ -20,13 +19,8 @@ class SysUserBase(SQLModel):
     avatar_url: str | None = Field(default=None, max_length=255, description="头像地址")
     phone: str | None = Field(default=None, max_length=32, description="手机号")
     email: str | None = Field(default=None, max_length=128, description="邮箱")
-    status: str = Field(
-        default="ACTIVE",
-        max_length=20,
-        description="ACTIVE 正常 / DISABLED 停用",
-        sa_column_kwargs={"server_default": text("'ACTIVE'")},
-    )
-    last_login_at: datetime | None = Field(default=None, sa_type=TZDateTime, description="最近登录时间")
+    status: str = Field(default="ACTIVE", max_length=20, description="ACTIVE 正常 / DISABLED 停用")
+    last_login_at: datetime | None = Field(default=None, description="最近登录时间")
     remark: str | None = Field(default=None, max_length=255, description="备注")
 
 
@@ -120,12 +114,7 @@ class SysRolePermission(Base, CreatedAtMixin, SysRolePermissionBase, table=True)
 
 class SystemConfigBase(SQLModel):
     config_key: str = Field(max_length=100, description="配置键")
-    config_value: dict[str, Any] = Field(
-        default_factory=dict,
-        sa_type=JSON,
-        description="配置值（JSON）",
-        sa_column_kwargs={"server_default": text("'{}'")},
-    )
+    config_value: dict = Field(default_factory=dict, sa_type=JSON, description="配置值（JSON）")
     description: str | None = Field(default=None, max_length=255, description="配置说明")
     updated_by: int | None = Field(default=None, foreign_key="sys_user.id", description="最后修改人 ID")
 
@@ -137,15 +126,7 @@ class SystemConfig(Base, SystemConfigBase, table=True):
     __table_args__ = (UniqueConstraint("config_key", name="uk_system_config_key"),)
 
     id: int | None = Field(default=None, primary_key=True)
-    updated_at: datetime = Field(
-        default_factory=utc_now,
-        sa_type=TZDateTime,
-        sa_column_kwargs={
-            "server_default": text("CURRENT_TIMESTAMP"),
-            "onupdate": func.now(),
-            "comment": "更新时间",
-        },
-    )
+    updated_at: datetime = Field(default_factory=utc_now, description="更新时间")
 
 
 __all__ = [

@@ -3,12 +3,9 @@
 from decimal import Decimal
 
 from sqlmodel import (
-    BigInteger,
     Field,
     Index,
-    Numeric,
     SQLModel,
-    Text,
     UniqueConstraint,
     text,
 )
@@ -23,24 +20,16 @@ class KnowledgeDocBase(SQLModel):
     biz_type: str | None = Field(
         default=None, max_length=30, description="关联对象类型 JOB 岗位 / COURSE 课程 / SYSTEM 系统"
     )
-    biz_id: int | None = Field(default=None, sa_type=BigInteger, description="关联业务 ID")
+    biz_id: int | None = Field(default=None, description="关联业务 ID")
     file_asset_id: int | None = Field(default=None, foreign_key="file_asset.id", description="文件 ID")
-    source: str = Field(
-        default="UPLOAD",
-        max_length=30,
-        description="来源 UPLOAD 文件上传 / TEXT 手工录入",
-        sa_column_kwargs={"server_default": text("'UPLOAD'")},
-    )
-    description: str | None = Field(default=None, sa_type=Text, description="说明/描述")
+    source: str = Field(default="UPLOAD", max_length=30, description="来源 UPLOAD 文件上传 / TEXT 手工录入")
+    description: str | None = Field(default=None, description="说明/描述")
     status: str = Field(
         default="PARSING",
         max_length=20,
         description="PARSING 解析中 / READY 可用 / FAILED 失败 / DISABLED 停用",
-        sa_column_kwargs={"server_default": text("'PARSING'")},
     )
-    total_chunks: int = Field(
-        default=0, description="切片总数", sa_column_kwargs={"server_default": text("0")}
-    )
+    total_chunks: int = Field(default=0, description="切片总数")
     uploaded_by: int | None = Field(default=None, foreign_key="sys_user.id", description="上传人 ID")
 
 
@@ -58,17 +47,12 @@ class KnowledgeDoc(Base, TimestampMixin, SoftDeleteMixin, KnowledgeDocBase, tabl
 class KnowledgeChunkBase(SQLModel):
     doc_id: int = Field(foreign_key="knowledge_doc.id", description="知识文档 ID")
     chunk_index: int = Field(description="切片序号")
-    content: str = Field(sa_type=Text, description="切片正文")
+    content: str = Field(description="切片正文")
     content_hash: str | None = Field(default=None, max_length=64, description="内容哈希")
-    char_count: int = Field(default=0, description="字符数", sa_column_kwargs={"server_default": text("0")})
+    char_count: int = Field(default=0, description="字符数")
     vector_id: str | None = Field(default=None, max_length=64, description="Milvus 主键")
     model_name: str | None = Field(default=None, max_length=100, description="模型名称")
-    status: str = Field(
-        default="READY",
-        max_length=20,
-        description="READY / FAILED / DISABLED",
-        sa_column_kwargs={"server_default": text("'READY'")},
-    )
+    status: str = Field(default="READY", max_length=20, description="READY / FAILED / DISABLED")
 
 
 class KnowledgeChunk(Base, TimestampMixin, KnowledgeChunkBase, table=True):
@@ -90,12 +74,7 @@ class AiQaSessionBase(SQLModel):
     student_id: int = Field(foreign_key="sys_user.id", description="学生 ID")
     title: str | None = Field(default=None, max_length=255, description="会话标题")
     subject: str | None = Field(default=None, max_length=100, description="课程/知识范围")
-    status: str = Field(
-        default="ACTIVE",
-        max_length=20,
-        description="ACTIVE 进行中 / CLOSED 已结束",
-        sa_column_kwargs={"server_default": text("'ACTIVE'")},
-    )
+    status: str = Field(default="ACTIVE", max_length=20, description="ACTIVE 进行中 / CLOSED 已结束")
 
 
 class AiQaSession(Base, TimestampMixin, AiQaSessionBase, table=True):
@@ -113,16 +92,11 @@ class AiQaSession(Base, TimestampMixin, AiQaSessionBase, table=True):
 class AiQaMessageBase(SQLModel):
     session_id: int = Field(foreign_key="ai_qa_session.id", description="会话 ID")
     role: str = Field(max_length=20, description="消息角色 USER 用户提问 / ASSISTANT AI 回答")
-    content: str = Field(sa_type=Text, description="消息内容")
+    content: str = Field(description="消息内容")
     model_name: str | None = Field(default=None, max_length=100, description="模型名称")
     prompt_tokens: int | None = Field(default=None, description="输入 Token 数")
     completion_tokens: int | None = Field(default=None, description="输出 Token 数")
-    status: str = Field(
-        default="COMPLETED",
-        max_length=20,
-        description="COMPLETED / FAILED",
-        sa_column_kwargs={"server_default": text("'COMPLETED'")},
-    )
+    status: str = Field(default="COMPLETED", max_length=20, description="COMPLETED / FAILED")
 
 
 class AiQaMessage(Base, CreatedAtMixin, AiQaMessageBase, table=True):
@@ -142,8 +116,8 @@ class AiQaCitationBase(SQLModel):
     doc_id: int | None = Field(default=None, foreign_key="knowledge_doc.id", description="知识文档 ID")
     chunk_id: int | None = Field(default=None, foreign_key="knowledge_chunk.id", description="知识切片 ID")
     source_title: str | None = Field(default=None, max_length=255, description="引用来源标题快照")
-    snippet: str | None = Field(default=None, sa_type=Text, description="引用片段快照")
-    relevance: Decimal | None = Field(default=None, sa_type=Numeric(6, 4), description="相关度 0~1")
+    snippet: str | None = Field(default=None, description="引用片段快照")
+    relevance: Decimal | None = Field(default=None, description="相关度 0~1")
 
 
 class AiQaCitation(Base, CreatedAtMixin, AiQaCitationBase, table=True):
