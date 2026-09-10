@@ -91,7 +91,10 @@ class SysUserRead(TimestampRead, SoftDeleteRead, SysUserBase): id: int  # 出参
 - **列类型**：交给 SQLModel 按注解自动映射即可——`str→VARCHAR`、`int→INTEGER`、`Decimal→NUMERIC`、
   `bool→BOOLEAN`、`datetime→DATETIME`、`date→DATE`。SQLite 不区分这些整数/字符串的宽度，不必写
   `sa_type=Text/SmallInteger/Numeric(5,2)` 之类的精确声明。
-- **唯一例外是 JSON**：`dict` / `list` 没有默认映射，必须标注 `sa_type=JSON`（如 `review_record.dimension_json`）。
+- **唯一例外是 JSON**：`dict` / `list` 不在 SQLModel 的类型映射表里，必须标注 `sa_type=JSON`
+  （如 `review_record.dimension_json`）。换成 `typing.Dict` / `typing.List` 没有用——SQLModel 会先把
+  泛型注解还原成 `dict` / `list` 这两个内置类再做匹配，`Dict[str, Any]`、`List[str]` 同样报
+  `has no matching SQLAlchemy type`。标注 `sa_type=JSON` 同时也保留了注解带来的 NOT NULL 语义。
 - **命名约束**：复合唯一约束、CHECK、索引必须放在 `__table_args__` 里显式命名（`uk_* / chk_* / idx_*`），
   与 DDL 原文保持一致，`Field(unique=True)` 生成的名字不符合字段清单。
 - **默认值**：只用 Python 侧的 `default=` / `default_factory=`，不写库级 `server_default`。
