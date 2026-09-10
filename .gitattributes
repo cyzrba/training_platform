@@ -1,0 +1,10 @@
+# 统一换行符，避免 Windows 上反复出现 CRLF/LF 变更
+* text=auto eol=lf
+
+# 二进制文件不做换行转换
+*.docx binary
+*.xlsx binary
+*.png binary
+*.jpg binary
+*.pdf binary
+*.db binary

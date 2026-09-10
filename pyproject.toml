@@ -1,0 +1,41 @@
+[project]
+name = "traning-platform"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "aiosqlite>=0.22.1",
+    "alembic>=1.19.2",
+    "fastapi>=0.141.1",
+    "pydantic-settings>=2.15.0",
+    "sqlalchemy[asyncio]>=2.0.52",
+    "uvicorn[standard]>=0.52.4",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+# tools/ 是既有的文档生成脚本，不纳入本次后端代码的 lint 范围
+exclude = [".venv", "data", "tools", "alembic/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ANN", "ARG", "C4", "RET", "PTH"]
+ignore = ["ANN401", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ANN201", "ANN001", "ARG001", "ARG002"]
+"alembic/env.py" = ["ANN001", "ANN201"]
+"scripts/*" = ["ANN201", "ANN001"]

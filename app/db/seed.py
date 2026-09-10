@@ -1,0 +1,318 @@
+"""种子数据（幂等）。
+
+覆盖：角色、权限点、角色权限、管理员账号、成长规则、技能树体系、七大标准模块库、系统配置。
+标准模块与技能树取值来自《需求确认书 0706》，如评审有调整，改这里重跑即可。
+"""
+
+from decimal import Decimal
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.db import SessionLocal
+from app.models.a_account import (
+    SysPermission,
+    SysRole,
+    SysRolePermission,
+    SystemConfig,
+    SysUser,
+    SysUserRole,
+)
+from app.models.c_job_skill import GrowthRule, SkillTree
+from app.models.d_project import ProjectStageTemplate
+
+ROLES: list[dict[str, str]] = [
+    {"role_code": "STUDENT", "role_name": "学生"},
+    {"role_code": "TEACHER", "role_name": "教师"},
+    {"role_code": "ADMIN", "role_name": "管理员"},
+]
+
+PERMISSIONS: list[tuple[str, str]] = [
+    ("USER_MANAGE", "用户管理"),
+    ("ROLE_MANAGE", "角色与权限管理"),
+    ("CLASS_MANAGE", "班级管理"),
+    ("GROUP_MANAGE", "分组管理"),
+    ("PROJECT_MANAGE", "实训项目管理"),
+    ("JOB_MANAGE", "岗位管理"),
+    ("SKILL_MANAGE", "技能体系管理"),
+    ("GROWTH_RULE_MANAGE", "成长规则配置"),
+    ("REVIEW_HANDLE", "实训结果审核"),
+    ("CERT_MANAGE", "证书管理"),
+    ("KNOWLEDGE_MANAGE", "知识库管理"),
+    ("SYSTEM_CONFIG", "系统配置"),
+]
+
+#: 角色 -> 权限点（ADMIN 取全部）
+ROLE_PERMISSIONS: dict[str, list[str]] = {
+    "STUDENT": [],
+    "TEACHER": [
+        "CLASS_MANAGE",
+        "GROUP_MANAGE",
+        "PROJECT_MANAGE",
+        "JOB_MANAGE",
+        "SKILL_MANAGE",
+        "GROWTH_RULE_MANAGE",
+        "REVIEW_HANDLE",
+        "CERT_MANAGE",
+        "KNOWLEDGE_MANAGE",
+    ],
+}
+
+#: 七大标准实训模块（需求确认书 2.2「标准化实训模块配置」）
+STAGE_TEMPLATES: list[dict[str, Any]] = [
+    {
+        "stage_key": "REQUIREMENT_ANALYSIS",
+        "stage_name": "需求分析",
+        "description": "明确任务目标、输入输出与约束条件",
+        "default_weight": Decimal("10"),
+        "sort_no": 1,
+    },
+    {
+        "stage_key": "SOLUTION_DESIGN",
+        "stage_name": "方案设计",
+        "description": "给出技术路线、模型/算法选型与整体方案",
+        "default_weight": Decimal("15"),
+        "sort_no": 2,
+    },
+    {
+        "stage_key": "DATA_PROCESSING",
+        "stage_name": "数据处理",
+        "description": "数据采集、清洗、标注与数据集构建",
+        "default_weight": Decimal("15"),
+        "sort_no": 3,
+    },
+    {
+        "stage_key": "MODEL_TRAINING",
+        "stage_name": "模型训练",
+        "description": "训练环境搭建、参数配置与模型训练",
+        "default_weight": Decimal("20"),
+        "sort_no": 4,
+    },
+    {
+        "stage_key": "MODEL_OPTIMIZATION",
+        "stage_name": "模型优化",
+        "description": "调参、蒸馏、剪枝等性能与精度优化",
+        "default_weight": Decimal("15"),
+        "sort_no": 5,
+    },
+    {
+        "stage_key": "MODEL_TESTING",
+        "stage_name": "模型测试",
+        "description": "指标评测、对比实验与问题分析",
+        "default_weight": Decimal("15"),
+        "sort_no": 6,
+    },
+    {
+        "stage_key": "REPORT_UPLOAD",
+        "stage_name": "实训报告上传",
+        "description": "整理过程记录与结论，上传实训报告及附件",
+        "default_weight": Decimal("10"),
+        "sort_no": 7,
+    },
+]
+
+#: 技能树四大体系（需求确认书 2.3「技能树」）
+SKILL_TREES: list[dict[str, str]] = [
+    {
+        "tree_code": "OPTICAL_IMAGING",
+        "tree_name": "光学成像系",
+        "description": "光源、镜头、相机选型与成像调优",
+    },
+    {
+        "tree_code": "TRADITIONAL_ALGORITHM",
+        "tree_name": "传统算法系",
+        "description": "图像预处理、特征提取与形态学处理",
+    },
+    {
+        "tree_code": "DEEP_LEARNING",
+        "tree_name": "深度学习系",
+        "description": "检测、分割、分类模型的训练与优化",
+    },
+    {
+        "tree_code": "SYSTEM_DEPLOYMENT",
+        "tree_name": "系统部署系",
+        "description": "模型部署、产线联调与工程化交付",
+    },
+]
+
+GROWTH_RULES: list[dict[str, Any]] = [
+    {
+        "level_type": "BASIC",
+        "unlock_condition_json": {},
+        "skill_max_level": 1,
+        "pass_score": Decimal("60"),
+        "level_description": "基础实训：默认开放，完成全部关卡即可提交评审",
+    },
+    {
+        "level_type": "ADVANCED",
+        "unlock_condition_json": {"completed_level": "BASIC", "min_count": 1},
+        "skill_max_level": 2,
+        "pass_score": Decimal("60"),
+        "level_description": "进阶实训：至少完成 1 个基础项目后自动解锁",
+    },
+    {
+        "level_type": "EXPANDED",
+        "unlock_condition_json": {"completed_level": "ADVANCED", "min_count": 1},
+        "skill_max_level": 3,
+        "pass_score": Decimal("60"),
+        "level_description": "拓展实训：至少完成 1 个进阶项目后自动解锁",
+    },
+]
+
+SYSTEM_CONFIGS: list[dict[str, Any]] = [
+    {
+        "config_key": "cert.no_rule",
+        "config_value": {"prefix": "SZPU", "pattern": "{prefix}-{job_code}-{year}-{seq:04d}"},
+        "description": "证书编号规则",
+    },
+    {
+        "config_key": "review.ai",
+        "config_value": {"model": "IndustryGPT", "fallback": "DeepSeek V4 Pro", "pass_score": 60},
+        "description": "AI 评审参数",
+    },
+    {
+        "config_key": "qa.limits",
+        "config_value": {"model": "Kimi 2.6", "context_rounds": 3, "retention_days": 7},
+        "description": "AI 问答上下文与保留策略",
+    },
+    {
+        "config_key": "skill.progress_rule",
+        "config_value": {"formula": "completed_projects / related_projects * 100"},
+        "description": "技能进度计算规则",
+    },
+]
+
+
+async def _get_or_create(
+    session: AsyncSession, model: type, defaults: dict[str, Any], **keys: Any
+) -> tuple[Any, bool]:
+    stmt = select(model)
+    for field, value in keys.items():
+        stmt = stmt.where(getattr(model, field) == value)
+    existing = (await session.execute(stmt)).scalar_one_or_none()
+    if existing is not None:
+        return existing, False
+    obj = model(**{**keys, **defaults})
+    session.add(obj)
+    await session.flush()
+    return obj, True
+
+
+async def run_seed(session: AsyncSession | None = None) -> dict[str, int]:
+    """写入种子数据，返回各类新增数量。"""
+    own_session = session is None
+    session = session or SessionLocal()
+    stats = {
+        "roles": 0,
+        "permissions": 0,
+        "role_permissions": 0,
+        "users": 0,
+        "stage_templates": 0,
+        "skill_trees": 0,
+        "growth_rules": 0,
+        "system_configs": 0,
+    }
+
+    try:
+        role_map: dict[str, SysRole] = {}
+        for item in ROLES:
+            role, created = await _get_or_create(
+                session, SysRole, {"role_name": item["role_name"]}, role_code=item["role_code"]
+            )
+            role_map[item["role_code"]] = role
+            stats["roles"] += int(created)
+
+        perm_map: dict[str, SysPermission] = {}
+        for code, name in PERMISSIONS:
+            perm, created = await _get_or_create(session, SysPermission, {"perm_name": name}, perm_code=code)
+            perm_map[code] = perm
+            stats["permissions"] += int(created)
+
+        # ADMIN 拥有全部权限
+        role_perm_map = {**ROLE_PERMISSIONS, "ADMIN": [code for code, _ in PERMISSIONS]}
+        for role_code, perm_codes in role_perm_map.items():
+            for code in perm_codes:
+                _, created = await _get_or_create(
+                    session,
+                    SysRolePermission,
+                    {},
+                    role_id=role_map[role_code].id,
+                    permission_id=perm_map[code].id,
+                )
+                stats["role_permissions"] += int(created)
+
+        admin, created = await _get_or_create(
+            session,
+            SysUser,
+            {"real_name": "系统管理员", "user_type": "ADMIN"},
+            user_no="admin",
+        )
+        stats["users"] += int(created)
+        _, created = await _get_or_create(
+            session, SysUserRole, {}, user_id=admin.id, role_id=role_map["ADMIN"].id
+        )
+
+        for item in STAGE_TEMPLATES:
+            _, created = await _get_or_create(
+                session,
+                ProjectStageTemplate,
+                {
+                    "stage_name": item["stage_name"],
+                    "description": item["description"],
+                    "default_required": True,
+                    "default_weight": item["default_weight"],
+                    "sort_no": item["sort_no"],
+                },
+                stage_key=item["stage_key"],
+            )
+            stats["stage_templates"] += int(created)
+
+        for item in SKILL_TREES:
+            _, created = await _get_or_create(
+                session,
+                SkillTree,
+                {"tree_name": item["tree_name"], "description": item["description"]},
+                tree_code=item["tree_code"],
+            )
+            stats["skill_trees"] += int(created)
+
+        for item in GROWTH_RULES:
+            _, created = await _get_or_create(
+                session,
+                GrowthRule,
+                {
+                    "unlock_condition_json": item["unlock_condition_json"],
+                    "skill_max_level": item["skill_max_level"],
+                    "pass_score": item["pass_score"],
+                    "level_description": item["level_description"],
+                },
+                level_type=item["level_type"],
+            )
+            stats["growth_rules"] += int(created)
+
+        for item in SYSTEM_CONFIGS:
+            _, created = await _get_or_create(
+                session,
+                SystemConfig,
+                {
+                    "config_value": item["config_value"],
+                    "description": item["description"],
+                    "updated_by": admin.id,
+                },
+                config_key=item["config_key"],
+            )
+            stats["system_configs"] += int(created)
+
+        await session.commit()
+    finally:
+        if own_session:
+            await session.close()
+
+    return stats
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    print(asyncio.run(run_seed()))
