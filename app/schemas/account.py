@@ -72,7 +72,6 @@ class SysRoleCreate(SysRoleBase):
 class SysRoleUpdate(SQLModel):
     role_code: str | None = Field(default=None, max_length=50)
     role_name: str | None = Field(default=None, max_length=50)
-    password: str | None = Field(default=None, max_length=100)
 
 
 class SysRoleRead(TimestampRead, SysRoleBase):
@@ -106,6 +105,50 @@ class SysUserRoleRead(CreatedAtRead, SysUserRoleBase):
     id: int
 
 
+# ----------------------------------------------------------------- 密码操作
+
+
+class PasswordResetIn(SQLModel):
+    """重置单个账号的密码。"""
+
+    new_password: str | None = Field(
+        default=None, min_length=6, max_length=64, description="新密码；留空 = 重置为系统默认密码"
+    )
+
+
+class PasswordResetBatchIn(SQLModel):
+    """批量重置密码（教师给全班学生重置时用）。"""
+
+    user_ids: list[int] = Field(min_length=1, description="要重置的用户 ID 列表")
+    new_password: str | None = Field(
+        default=None, min_length=6, max_length=64, description="新密码；留空 = 重置为系统默认密码"
+    )
+
+
+class PasswordResetResult(SQLModel):
+    """密码重置结果。"""
+
+    updated: int = Field(description="实际被重置的账号数")
+    user_ids: list[int] = Field(default_factory=list, description="被重置的账号 ID")
+
+
+# ------------------------------------------------------------ 关系（覆盖式设置）
+
+
+class UserRoleSetIn(SQLModel):
+    """覆盖式设置用户角色。"""
+
+    role_ids: list[int] = Field(default_factory=list, description="角色 ID 列表；传空数组表示清空该用户角色")
+
+
+class RolePermissionSetIn(SQLModel):
+    """覆盖式设置角色权限。"""
+
+    permission_ids: list[int] = Field(
+        default_factory=list, description="权限 ID 列表；传空数组表示清空该角色权限"
+    )
+
+
 # ----------------------------------------------------------------- 角色-权限关系
 
 
@@ -136,6 +179,10 @@ class SystemConfigRead(UpdatedAtRead, SystemConfigBase):
 
 
 __all__ = [
+    "PasswordResetBatchIn",
+    "PasswordResetIn",
+    "PasswordResetResult",
+    "RolePermissionSetIn",
     "SysPermissionCreate",
     "SysPermissionRead",
     "SysPermissionUpdate",
@@ -155,4 +202,5 @@ __all__ = [
     "SystemConfigCreate",
     "SystemConfigRead",
     "SystemConfigUpdate",
+    "UserRoleSetIn",
 ]

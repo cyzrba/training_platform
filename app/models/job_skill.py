@@ -13,7 +13,7 @@ from sqlmodel import (
     text,
 )
 
-from app.core.time import utc_now
+from app.core.time import now
 from app.models.base import Base, CreatedAtMixin, SoftDeleteMixin, TimestampMixin
 
 # ------------------------------------------------------------------------- 岗位
@@ -51,7 +51,7 @@ class StudentJobBase(SQLModel):
     student_id: int = Field(foreign_key="sys_user.id", description="学生 ID")
     job_id: int = Field(foreign_key="job.id", description="岗位 ID")
     is_primary: bool = Field(default=False, description="是否当前主岗位（每名学生至多一个）")
-    selected_at: datetime = Field(default_factory=utc_now, description="选择时间")
+    selected_at: datetime = Field(default_factory=now, description="选择时间")
     switched_at: datetime | None = Field(default=None, description="切换时间")
 
 
@@ -140,20 +140,15 @@ class SkillNodeDependency(Base, CreatedAtMixin, SkillNodeDependencyBase, table=T
 class StudentSkillBase(SQLModel):
     student_id: int = Field(foreign_key="sys_user.id", description="学生 ID")
     skill_node_id: int = Field(foreign_key="skill_node.id", description="技能节点 ID")
-    state: str = Field(
-        default="LOCKED",
-        max_length=20,
-        description="LOCKED 未解锁 / ACTIVATED 已激活 / MASTERED 已精通",
-    )
     level: int = Field(default=0, description="熟练等级（预留：三态模式下可用 0/1/2）")
     progress: Decimal = Field(default=Decimal(0), description="技能进度 0~100 = 完成数 ÷ 关联项目总数")
-    activated_at: datetime | None = Field(default=None, description="点亮时间")
-    mastered_at: datetime | None = Field(default=None, description="精通时间")
+    activated_at: datetime | None = Field(default=None, description="首次产生进度的时间")
+    mastered_at: datetime | None = Field(default=None, description="首次达到 100% 的时间")
     source: str | None = Field(default=None, max_length=30, description="进度来源 PROJECT / REVIEW / MANUAL")
 
 
 class StudentSkill(Base, TimestampMixin, StudentSkillBase, table=True):
-    """学生每个技能点的进度与状态。"""
+    """学生每个技能点的进度（0~100）；不再单独记录状态，前端按进度展示。"""
 
     __tablename__ = "student_skill"
     __table_args__ = (

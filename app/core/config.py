@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     app_name: str = "岗位闯关式实训平台"
     app_version: str = "0.1.0"
-    api_prefix: str = "/api/v1"
+    api_prefix: str = "/api"
     debug: bool = True
 
     # 留空则使用 <项目根>/data/app.db
@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     sql_echo: bool = False
 
     cors_origins: list[str] = ["*"]
+
+    #: 新建账号（用户 / 导入的学生）的默认密码，仅写入哈希后落库
+    default_password: str = "123456"
 
     default_page_size: int = 20
     max_page_size: int = 200

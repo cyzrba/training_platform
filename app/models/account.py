@@ -4,7 +4,7 @@ from datetime import datetime
 
 from sqlmodel import JSON, Field, Index, SQLModel, UniqueConstraint, text
 
-from app.core.time import utc_now
+from app.core.time import now
 from app.models.base import Base, CreatedAtMixin, SoftDeleteMixin, TimestampMixin
 
 # --------------------------------------------------------------------- 平台用户
@@ -25,7 +25,11 @@ class SysUserBase(SQLModel):
 
 
 class SysUser(Base, TimestampMixin, SoftDeleteMixin, SysUserBase, table=True):
-    """平台用户：单学院内学生/教师/管理员；不存密码，身份来自校方 SSO。"""
+    """平台用户：单学院内学生/教师/管理员。
+
+    密码只存哈希（见 app/services/password.py），默认密码由 settings.default_password 决定；
+    password_hash 不放进 SysUserBase，避免泄漏到 Create / Read 等接口 Schema。
+    """
 
     __tablename__ = "sys_user"
     __table_args__ = (
@@ -35,6 +39,11 @@ class SysUser(Base, TimestampMixin, SoftDeleteMixin, SysUserBase, table=True):
     )
 
     id: int | None = Field(default=None, primary_key=True)
+    password_hash: str | None = Field(
+        default=None,
+        max_length=128,
+        description="密码哈希（pbkdf2_sha256$迭代次数$盐$摘要）；为空表示从未设置密码",
+    )
 
 
 # ------------------------------------------------------------------------- 角色
@@ -43,9 +52,6 @@ class SysUser(Base, TimestampMixin, SoftDeleteMixin, SysUserBase, table=True):
 class SysRoleBase(SQLModel):
     role_code: str = Field(max_length=50, description="角色编码")
     role_name: str = Field(max_length=50, description="角色名称")
-    password: str | None = Field(
-        default=None, max_length=100, description="预留：mock 登录/联调用；生产走 SSO"
-    )
 
 
 class SysRole(Base, TimestampMixin, SysRoleBase, table=True):
@@ -126,7 +132,7 @@ class SystemConfig(Base, SystemConfigBase, table=True):
     __table_args__ = (UniqueConstraint("config_key", name="uk_system_config_key"),)
 
     id: int | None = Field(default=None, primary_key=True)
-    updated_at: datetime = Field(default_factory=utc_now, description="更新时间")
+    updated_at: datetime = Field(default_factory=now, description="更新时间")
 
 
 __all__ = [

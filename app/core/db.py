@@ -53,10 +53,14 @@ SessionLocal = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_co
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """FastAPI 依赖：每请求一个会话，异常自动回滚。"""
+    """FastAPI 依赖：每请求一个会话，成功即提交，异常自动回滚。
+
+    仓储层只做 flush 不提交，事务边界统一收在这里：请求正常结束 = 一个事务。
+    """
     async with SessionLocal() as session:
         try:
             yield session
+            await session.commit()
         except Exception:
             await session.rollback()
             raise

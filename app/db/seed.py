@@ -21,6 +21,7 @@ from app.models.account import (
 )
 from app.models.job_skill import GrowthRule, SkillTree
 from app.models.project import ProjectStageTemplate
+from app.services.password import default_password_hash
 
 ROLES: list[dict[str, str]] = [
     {"role_code": "STUDENT", "role_name": "学生"},
@@ -249,7 +250,11 @@ async def run_seed(session: AsyncSession | None = None) -> dict[str, int]:
         admin, created = await _get_or_create(
             session,
             SysUser,
-            {"real_name": "系统管理员", "user_type": "ADMIN"},
+            {
+                "real_name": "系统管理员",
+                "user_type": "ADMIN",
+                "password_hash": default_password_hash(),
+            },
             user_no="admin",
         )
         stats["users"] += int(created)

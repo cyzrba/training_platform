@@ -3,6 +3,7 @@
 from decimal import Decimal
 
 from sqlmodel import (
+    JSON,
     CheckConstraint,
     Field,
     Index,
@@ -58,8 +59,12 @@ class ProjectStageTemplateBase(SQLModel):
     sort_no: int = Field(default=0, description="展示排序，值越小越靠前")
 
 
-class ProjectStageTemplate(Base, TimestampMixin, ProjectStageTemplateBase, table=True):
-    """标准化模块库（七大模块默认配置），教师建项目时从中挑选。"""
+class ProjectStageTemplate(Base, TimestampMixin, SoftDeleteMixin, ProjectStageTemplateBase, table=True):
+    """标准化模块库（关卡模板）：教师可自定义增删，项目只能从这里挑。
+
+    软删：删掉的条目不再出现在列表/详情里，但被项目引用过的历史仍可追溯；
+    重新用同一个 ``stage_key`` 新增时会把软删的条目恢复出来（见 create 接口）。
+    """
 
     __tablename__ = "project_stage_template"
     __table_args__ = (UniqueConstraint("stage_key", name="uk_stage_template_key"),)
@@ -72,27 +77,33 @@ class ProjectStageTemplate(Base, TimestampMixin, ProjectStageTemplateBase, table
 
 class ProjectModuleBase(SQLModel):
     project_id: int = Field(foreign_key="training_project.id", description="项目 ID")
-    template_id: int | None = Field(
-        default=None,
+    template_id: int = Field(
         foreign_key="project_stage_template.id",
-        description="来自模块库；自定义模块为空",
+        description="模块库模板 ID；关卡只能从模块库选，这里必填",
     )
-    stage_key: str | None = Field(default=None, max_length=50, description="标准模块 code；自定义模块为空")
-    module_name: str = Field(max_length=100, description="模块名称（来自模板或自定义）")
     stage_no: int = Field(description="项目内填写顺序，数量不限")
+    items_json: list = Field(
+        default_factory=list,
+        sa_type=JSON,
+        description='填写引导子标题，由教师在本项目里手填；形如 [{"title": "检测对象描述"}]',
+    )
     requirement: str | None = Field(default=None, description="该模块的作答要求（覆盖模板）")
     accept_standard: str | None = Field(default=None, description="该模块的验收标准（覆盖模板）")
     required: bool = Field(default=True, description="是否必填")
-    weight: Decimal = Field(default=Decimal(0), description="分值占比（启用模块合计 100）")
-    enabled: bool = Field(default=True, description="是否启用")
+    weight: Decimal = Field(default=Decimal(0), description="分值占比（选中的模块合计 100）")
 
 
 class ProjectModule(Base, TimestampMixin, ProjectModuleBase, table=True):
-    """项目模块组成：可从模块库挑选或自定义，数量不限；一条 = 一个模块。"""
+    """项目模块组成：一条 = 项目里选中的一个模块库模板。
+
+    只记录"被选中的模板"，没选的不落库，因此不需要 enabled 字段；
+    关卡内容（名称、code、默认要求/标准）统一读 project_stage_template，
+    要新增关卡必须先加到模块库，不能在项目里临时造。
+    """
 
     __tablename__ = "project_module"
     __table_args__ = (
-        UniqueConstraint("project_id", "stage_key", name="uk_project_module_key"),
+        UniqueConstraint("project_id", "template_id", name="uk_project_module_template"),
         UniqueConstraint("project_id", "stage_no", name="uk_project_module_no"),
         Index("idx_project_module_project", "project_id", "stage_no"),
     )

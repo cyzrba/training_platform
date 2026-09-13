@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from app.crud import BaseRepository
 from app.models.account import SysUser
 from app.models.job_skill import Job, StudentJob
-from app.models.project import ProjectModule, TrainingProject
+from app.models.project import ProjectModule, ProjectStageTemplate, TrainingProject
 from app.schemas.base import PageParams
 
 
@@ -28,7 +28,7 @@ async def test_create_read_and_soft_delete(db_session) -> None:
     )
     assert user.id is not None
     assert user.status == "ACTIVE"  # 默认值生效
-    assert user.created_at is not None  # 时间戳按 UTC 存库
+    assert user.created_at is not None  # 时间戳按本地时间存库
 
     fetched = await repo.get(user.id)
     assert fetched is not None and fetched.user_no == "2026001"
@@ -51,26 +51,35 @@ async def test_unique_constraint_enforced(db_session) -> None:
 
 @pytest.mark.asyncio
 async def test_check_constraint_and_project_module(db_session) -> None:
-    """difficulty 超出 1~5 触发 CHECK；项目与模块按外键关联写入。"""
+    """difficulty 超出 1~5 触发 CHECK；项目模块只能挑模块库里的模板。"""
     project = TrainingProject(project_name="工业视觉缺陷检测实训", project_level="BASIC", difficulty=3)
     db_session.add(project)
+    await db_session.flush()
+
+    first_template = ProjectStageTemplate(stage_key="REQUIREMENT_ANALYSIS", stage_name="需求分析")
+    second_template = ProjectStageTemplate(stage_key="SOLUTION_DESIGN", stage_name="方案设计")
+    db_session.add_all(
+        [
+            first_template,
+            second_template,
+        ]
+    )
     await db_session.flush()
 
     db_session.add_all(
         [
             ProjectModule(
                 project_id=project.id,
-                module_name="需求分析",
+                template_id=first_template.id,
                 stage_no=1,
-                stage_key="REQUIREMENT_ANALYSIS",
             ),
-            ProjectModule(project_id=project.id, module_name="自定义模块", stage_no=2),
+            ProjectModule(project_id=project.id, template_id=second_template.id, stage_no=2),
         ]
     )
     await db_session.flush()
 
     # stage_no 在项目内唯一
-    db_session.add(ProjectModule(project_id=project.id, module_name="重复序号", stage_no=2, stage_key="X"))
+    db_session.add(ProjectModule(project_id=project.id, template_id=second_template.id, stage_no=2))
     with pytest.raises(IntegrityError):
         await db_session.flush()
     await db_session.rollback()

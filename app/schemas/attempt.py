@@ -14,6 +14,7 @@ from app.models.attempt import (
     TrainingAttemptBase,
 )
 from app.schemas.base import CreatedAtRead, TimestampRead
+from app.schemas.project import StageItem
 from app.schemas.review import ReviewRecordRead
 
 # --------------------------------------------------------------------- 文件
@@ -56,6 +57,14 @@ class StudentProjectRead(TimestampRead, StudentProjectBase):
     id: int
 
 
+class StudentProjectDetail(StudentProjectRead):
+    """学生实训记录详情：带项目名称与闯关轮次。"""
+
+    project_name: str | None = Field(default=None, description="项目名称")
+    project_level: str | None = Field(default=None, description="项目层级")
+    attempts: list["TrainingAttemptRead"] = Field(default_factory=list, description="闯关轮次")
+
+
 # ------------------------------------------------------------------- 闯关轮次
 
 
@@ -92,6 +101,34 @@ class AttemptStageRead(TimestampRead, AttemptStageBase):
     id: int
 
 
+class AttemptStageDetail(AttemptStageRead):
+    """模块作答：带上关卡信息（名称/顺序/是否必填/填写引导子标题）。"""
+
+    stage_no: int = Field(description="关卡顺序")
+    stage_key: str | None = Field(default=None, description="关卡编码（取模块库）")
+    stage_name: str | None = Field(default=None, description="关卡名称（取模块库）")
+    required: bool = Field(default=True, description="是否必填")
+    weight: Decimal = Field(default=Decimal(0), description="该关卡分值占比")
+    items_json: list[StageItem] = Field(default_factory=list, description="教师为这个项目填的填写引导子标题")
+    file_count: int = Field(default=0, description="附件数量")
+
+
+class AttemptDetail(TrainingAttemptRead):
+    """一轮闯关详情：带全部关卡作答。"""
+
+    student_id: int = Field(description="学生 ID")
+    project_id: int = Field(description="项目 ID")
+    project_name: str | None = Field(default=None, description="项目名称")
+    stages: list[AttemptStageDetail] = Field(default_factory=list, description="各关卡作答")
+
+
+class AttemptStageSaveIn(SQLModel):
+    """保存某个关卡的作答。"""
+
+    answer_text: str | None = Field(default=None, description="作答内容")
+    is_filled: bool | None = Field(default=None, description="是否填写完成；不传则按作答内容是否为空自动判断")
+
+
 class AttemptStageFileCreate(AttemptStageFileBase):
     pass
 
@@ -121,6 +158,21 @@ class ProjectSubmissionRead(TimestampRead, ProjectSubmissionBase):
     id: int
 
 
+class ProjectSubmissionListRead(ProjectSubmissionRead):
+    """教师看板用的提交行：带学生、项目与轮次信息。"""
+
+    student_id: int | None = Field(default=None, description="学生 ID")
+    project_id: int | None = Field(default=None, description="项目 ID")
+    project_name: str | None = Field(default=None, description="项目名称")
+    attempt_no: int | None = Field(default=None, description="第几轮闯关")
+
+
+class SubmissionObjectionIn(SQLModel):
+    """学生对 AI 评审结果提异议（会转给教师复核）。"""
+
+    reason: str = Field(min_length=1, max_length=500, description="异议说明 / 留言，教师复核时能看到")
+
+
 class ProjectSubmissionDetail(ProjectSubmissionRead):
     """提交详情：附带模块作答与评审记录。"""
 
@@ -131,6 +183,8 @@ class ProjectSubmissionDetail(ProjectSubmissionRead):
 
 __all__ = [
     "AttemptStageCreate",
+    "AttemptStageDetail",
+    "AttemptStageSaveIn",
     "AttemptStageFileCreate",
     "AttemptStageFileRead",
     "AttemptStageRead",
@@ -140,9 +194,13 @@ __all__ = [
     "FileAssetUpdate",
     "ProjectSubmissionCreate",
     "ProjectSubmissionDetail",
+    "ProjectSubmissionListRead",
+    "SubmissionObjectionIn",
     "ProjectSubmissionRead",
     "ProjectSubmissionUpdate",
+    "AttemptDetail",
     "StudentProjectCreate",
+    "StudentProjectDetail",
     "StudentProjectRead",
     "StudentProjectUpdate",
     "TrainingAttemptCreate",

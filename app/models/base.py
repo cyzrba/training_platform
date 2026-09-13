@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlmodel import Field, MetaData, SQLModel
 
 from app.core.naming import NAMING_CONVENTION
-from app.core.time import utc_now
+from app.core.time import now
 
 
 class Base(SQLModel):
@@ -17,14 +17,17 @@ class Base(SQLModel):
 class CreatedAtMixin(SQLModel):
     """只有 created_at 的表（关系表、流水表）。"""
 
-    created_at: datetime = Field(default_factory=utc_now, description="创建时间")
+    created_at: datetime = Field(default_factory=now, description="创建时间")
 
 
 class TimestampMixin(SQLModel):
-    """created_at + updated_at（主数据表）；updated_at 由仓储层在更新时刷新。"""
+    """created_at + updated_at（主数据表）；updated_at 由仓储层在更新时刷新。
 
-    created_at: datetime = Field(default_factory=utc_now, description="创建时间")
-    updated_at: datetime = Field(default_factory=utc_now, description="更新时间")
+    时间取值见 app/core/time.py：单时区部署，直接存本地时间。
+    """
+
+    created_at: datetime = Field(default_factory=now, description="创建时间")
+    updated_at: datetime = Field(default_factory=now, description="更新时间")
 
 
 class SoftDeleteMixin(SQLModel):

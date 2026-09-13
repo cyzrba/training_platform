@@ -1,7 +1,9 @@
 """枚举字典：与《数据库表字段清单》附录 A 一一对应。
 
 落库仍是 varchar code（见各模型 status 字段），枚举在此集中定义，
-供 Pydantic 校验、seed 数据与 /api/v1/enums 字典接口共用。
+供 Pydantic 校验、seed 数据与 /api/enums 字典接口共用。
+
+每个枚举成员后面的中文注释即该 code 的业务含义，与 ENUM_DICTS 里的文案保持一致。
 """
 
 from dataclasses import dataclass
@@ -9,170 +11,212 @@ from enum import StrEnum
 
 
 class UserType(StrEnum):
-    STUDENT = "STUDENT"
-    TEACHER = "TEACHER"
-    ADMIN = "ADMIN"
+    """用户类型：决定账号在平台里的身份与可见菜单。"""
+
+    STUDENT = "STUDENT"  # 学生
+    TEACHER = "TEACHER"  # 教师
+    ADMIN = "ADMIN"  # 管理员
 
 
 class AccountStatus(StrEnum):
-    ACTIVE = "ACTIVE"
-    DISABLED = "DISABLED"
+    """账号状态。"""
+
+    ACTIVE = "ACTIVE"  # 正常，可登录
+    DISABLED = "DISABLED"  # 停用，禁止登录
 
 
 class ClassStatus(StrEnum):
-    ACTIVE = "ACTIVE"
-    ARCHIVED = "ARCHIVED"
+    """班级状态。"""
+
+    ACTIVE = "ACTIVE"  # 在读
+    ARCHIVED = "ARCHIVED"  # 归档，历史班级只读
 
 
 class ClassStudentStatus(StrEnum):
-    ENROLLED = "ENROLLED"
-    LEFT = "LEFT"
+    """学生在班状态。"""
+
+    ENROLLED = "ENROLLED"  # 在班，任务发布按此状态取人
+    LEFT = "LEFT"  # 已离班 / 已转出
 
 
 class EnabledStatus(StrEnum):
     """岗位 / 技能树 / 技能节点的启停状态。"""
 
-    ENABLED = "ENABLED"
-    DISABLED = "DISABLED"
+    ENABLED = "ENABLED"  # 启用
+    DISABLED = "DISABLED"  # 停用
 
 
 class LearningLevel(StrEnum):
     """实训层级：项目层级、岗位推荐等级、成长规则层级共用。"""
 
-    BASIC = "BASIC"
-    ADVANCED = "ADVANCED"
-    EXPANDED = "EXPANDED"
+    BASIC = "BASIC"  # 基础
+    ADVANCED = "ADVANCED"  # 进阶
+    EXPANDED = "EXPANDED"  # 拓展
 
 
 class ProjectStatus(StrEnum):
-    DRAFT = "DRAFT"
-    PUBLISHED = "PUBLISHED"
-    OFF_SHELF = "OFF_SHELF"
+    """实训项目状态。"""
+
+    DRAFT = "DRAFT"  # 草稿，未发布
+    PUBLISHED = "PUBLISHED"  # 已发布，学生可见可做
+    OFF_SHELF = "OFF_SHELF"  # 已下架
 
 
 class StudentProjectStatus(StrEnum):
-    NOT_STARTED = "NOT_STARTED"
-    IN_PROGRESS = "IN_PROGRESS"
-    SUBMITTED = "SUBMITTED"
-    COMPLETED = "COMPLETED"
+    """学生实训记录状态（学生 × 项目的闯关进度）。"""
+
+    NOT_STARTED = "NOT_STARTED"  # 未开始
+    IN_PROGRESS = "IN_PROGRESS"  # 进行中
+    SUBMITTED = "SUBMITTED"  # 已提交，待评审
+    COMPLETED = "COMPLETED"  # 已完成
 
 
 class AttemptStatus(StrEnum):
-    IN_PROGRESS = "IN_PROGRESS"
-    SUBMITTED = "SUBMITTED"
-    COMPLETED = "COMPLETED"
-    ABANDONED = "ABANDONED"
+    """闯关轮次状态（重新挑战生成新一轮）。"""
+
+    IN_PROGRESS = "IN_PROGRESS"  # 进行中
+    SUBMITTED = "SUBMITTED"  # 已提交
+    COMPLETED = "COMPLETED"  # 已完成
+    ABANDONED = "ABANDONED"  # 已放弃
 
 
 class SubmissionStatus(StrEnum):
-    PENDING_AI = "PENDING_AI"
-    AI_PASSED = "AI_PASSED"
-    AI_FAILED = "AI_FAILED"
-    PENDING_REVIEW = "PENDING_REVIEW"
-    REVIEWING = "REVIEWING"
-    REVIEWED = "REVIEWED"
-    WITHDRAWN = "WITHDRAWN"
+    """整单提交的评审流转状态。"""
+
+    PENDING_AI = "PENDING_AI"  # 待 AI 评审
+    AI_PASSED = "AI_PASSED"  # AI 判定通过
+    AI_FAILED = "AI_FAILED"  # AI 判定未通过，学生可提异议
+    PENDING_REVIEW = "PENDING_REVIEW"  # 待教师复审
+    REVIEWING = "REVIEWING"  # 复审中
+    REVIEWED = "REVIEWED"  # 已复审
+    WITHDRAWN = "WITHDRAWN"  # 学生已撤回
 
 
 class Conclusion(StrEnum):
-    PASS = "PASS"
-    FAIL = "FAIL"
+    """项目是否通过（由评审分数与配置的及格线判定，不由评审人指定）。"""
+
+    PASS = "PASS"  # 通过
+    FAIL = "FAIL"  # 不通过
 
 
 class ReviewKind(StrEnum):
-    AI = "AI"
-    TEACHER = "TEACHER"
+    """评审类型。"""
+
+    AI = "AI"  # AI 自动评审
+    TEACHER = "TEACHER"  # 教师复审
 
 
 class ReviewStatus(StrEnum):
-    DRAFT = "DRAFT"
-    FINAL = "FINAL"
+    """评审记录状态。"""
+
+    DRAFT = "DRAFT"  # 草稿，AI 中间结果或教师未定稿
+    FINAL = "FINAL"  # 最终结论
 
 
 class AiJobStatus(StrEnum):
-    QUEUED = "QUEUED"
-    PROCESSING = "PROCESSING"
-    SUCCEED = "SUCCEED"
-    FAILED = "FAILED"
+    """AI 评审异步任务状态（用于重试与对账）。"""
 
-
-class SkillState(StrEnum):
-    LOCKED = "LOCKED"
-    ACTIVATED = "ACTIVATED"
-    MASTERED = "MASTERED"
+    QUEUED = "QUEUED"  # 排队中
+    PROCESSING = "PROCESSING"  # 处理中
+    SUCCEED = "SUCCEED"  # 成功
+    FAILED = "FAILED"  # 失败，可重试
 
 
 class SkillProgressSource(StrEnum):
-    PROJECT = "PROJECT"
-    REVIEW = "REVIEW"
-    MANUAL = "MANUAL"
+    """技能进度的来源。"""
+
+    PROJECT = "PROJECT"  # 由完成项目推进
+    REVIEW = "REVIEW"  # 由评审结果推进
+    MANUAL = "MANUAL"  # 人工调整
 
 
 class CertificateStatus(StrEnum):
-    VALID = "VALID"
-    EXPIRED = "EXPIRED"
-    REVOKED = "REVOKED"
-    RESSUED = "RESSUED"
+    """证书状态。"""
+
+    VALID = "VALID"  # 有效
+    EXPIRED = "EXPIRED"  # 已过期
+    REVOKED = "REVOKED"  # 已作废
+    RESSUED = "RESSUED"  # 已补发（拼写沿用字段清单，不要改）
 
 
 class FileBizType(StrEnum):
-    SUBMISSION = "SUBMISSION"
-    AVATAR = "AVATAR"
-    CERT_PDF = "CERT_PDF"
-    IMPORT = "IMPORT"
-    REPORT = "REPORT"
+    """文件业务类型（file_asset.biz_type）。"""
+
+    SUBMISSION = "SUBMISSION"  # 作答附件
+    AVATAR = "AVATAR"  # 头像
+    CERT_PDF = "CERT_PDF"  # 证书 PDF
+    IMPORT = "IMPORT"  # 导入名单
+    REPORT = "REPORT"  # 实训报告
 
 
 class FileStatus(StrEnum):
-    ACTIVE = "ACTIVE"
-    INVALID = "INVALID"
+    """文件状态。"""
+
+    ACTIVE = "ACTIVE"  # 可用
+    INVALID = "INVALID"  # 已失效
 
 
 class KnowledgeBizType(StrEnum):
-    JOB = "JOB"
-    COURSE = "COURSE"
-    SYSTEM = "SYSTEM"
+    """知识文档关联的对象类型。"""
+
+    JOB = "JOB"  # 岗位
+    COURSE = "COURSE"  # 课程
+    SYSTEM = "SYSTEM"  # 系统
 
 
 class KnowledgeSource(StrEnum):
-    UPLOAD = "UPLOAD"
-    TEXT = "TEXT"
+    """知识文档来源。"""
+
+    UPLOAD = "UPLOAD"  # 文件上传
+    TEXT = "TEXT"  # 手工录入
 
 
 class KnowledgeDocStatus(StrEnum):
-    PARSING = "PARSING"
-    READY = "READY"
-    FAILED = "FAILED"
-    DISABLED = "DISABLED"
+    """知识文档状态（解析流水线）。"""
+
+    PARSING = "PARSING"  # 解析中
+    READY = "READY"  # 可用，切片已入库
+    FAILED = "FAILED"  # 解析失败
+    DISABLED = "DISABLED"  # 停用
 
 
 class KnowledgeChunkStatus(StrEnum):
-    READY = "READY"
-    FAILED = "FAILED"
-    DISABLED = "DISABLED"
+    """知识切片状态。"""
+
+    READY = "READY"  # 可用，向量已写入 Milvus
+    FAILED = "FAILED"  # 失败
+    DISABLED = "DISABLED"  # 停用
 
 
 class QaSessionStatus(StrEnum):
-    ACTIVE = "ACTIVE"
-    CLOSED = "CLOSED"
+    """AI 问答会话状态。"""
+
+    ACTIVE = "ACTIVE"  # 进行中
+    CLOSED = "CLOSED"  # 已结束
 
 
 class QaRole(StrEnum):
-    USER = "USER"
-    ASSISTANT = "ASSISTANT"
+    """问答消息角色。"""
+
+    USER = "USER"  # 用户提问
+    ASSISTANT = "ASSISTANT"  # AI 回答
 
 
 class QaMessageStatus(StrEnum):
-    COMPLETED = "COMPLETED"
-    FAILED = "FAILED"
+    """问答消息状态。"""
+
+    COMPLETED = "COMPLETED"  # 已完成
+    FAILED = "FAILED"  # 失败
 
 
 class NotificationBizType(StrEnum):
-    REVIEW_RESULT = "REVIEW_RESULT"
-    STAGE_RESULT = "STAGE_RESULT"
-    TASK_PUBLISH = "TASK_PUBLISH"
-    CERT = "CERT"
-    POINT = "POINT"
+    """站内通知的业务类型。"""
+
+    REVIEW_RESULT = "REVIEW_RESULT"  # 复审结果
+    STAGE_RESULT = "STAGE_RESULT"  # 关卡结果
+    TASK_PUBLISH = "TASK_PUBLISH"  # 任务发布
+    CERT = "CERT"  # 证书
+    POINT = "POINT"  # 积分
 
 
 @dataclass(frozen=True)
@@ -290,12 +334,6 @@ ENUM_DICTS: tuple[EnumDict, ...] = (
         "AI 评审任务状态",
         AiJobStatus,
         {"QUEUED": "排队中", "PROCESSING": "处理中", "SUCCEED": "成功", "FAILED": "失败"},
-    ),
-    _enum_dict(
-        "skill_state",
-        "技能状态",
-        SkillState,
-        {"LOCKED": "未解锁", "ACTIVATED": "已激活", "MASTERED": "已精通"},
     ),
     _enum_dict(
         "skill_progress_source",

@@ -11,7 +11,7 @@ from sqlmodel import (
     text,
 )
 
-from app.core.time import utc_now
+from app.core.time import now
 from app.models.base import Base, CreatedAtMixin, TimestampMixin
 
 # --------------------------------------------------------------------- 文件
@@ -157,7 +157,7 @@ class ProjectSubmissionBase(SQLModel):
     total_score: Decimal | None = Field(default=None, description="本次提交总分 0~100")
     objection_reason: str | None = Field(default=None, max_length=500, description="学生对 AI 结果的异议说明")
     is_starred: bool = Field(default=False, description="教师标星（标星后进入审核列表关注区）")
-    submitted_at: datetime = Field(default_factory=utc_now, description="整单提交时间")
+    submitted_at: datetime = Field(default_factory=now, description="整单提交时间")
     withdrawn_at: datetime | None = Field(default=None, description="学生撤回时间")
     reviewed_at: datetime | None = Field(default=None, description="评审完成时间")
 

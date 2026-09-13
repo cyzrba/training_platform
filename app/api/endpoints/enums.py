@@ -1,19 +1,21 @@
-"""枚举字典接口：前端下拉框 / 标签文案统一从这里取。"""
+"""枚举字典接口：前端下拉框 / 标签文案统一从这里取（/api/enums）。"""
 
 from fastapi import APIRouter, HTTPException, status
 
+from app.core.response import EnvelopeRoute
 from app.models.enums import ENUM_DICTS, ENUM_INDEX
+from app.schemas.base import ApiResponse
 from app.schemas.enums import EnumDictOut
 
-router = APIRouter(prefix="/enums", tags=["枚举字典"])
+router = APIRouter(route_class=EnvelopeRoute, prefix="/enums", tags=["枚举字典"])
 
 
-@router.get("", response_model=list[EnumDictOut], summary="全部枚举字典")
+@router.get("", response_model=ApiResponse[list[EnumDictOut]], summary="全部枚举字典")
 async def list_enum_dicts() -> list[EnumDictOut]:
     return [EnumDictOut.from_dataclass(item) for item in ENUM_DICTS]
 
 
-@router.get("/{enum_key}", response_model=EnumDictOut, summary="单个枚举字典")
+@router.get("/{enum_key}", response_model=ApiResponse[EnumDictOut], summary="单个枚举字典")
 async def get_enum_dict(enum_key: str) -> EnumDictOut:
     data = ENUM_INDEX.get(enum_key)
     if data is None:

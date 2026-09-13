@@ -4,7 +4,7 @@ from datetime import datetime
 
 from sqlmodel import Field, Index, SQLModel, UniqueConstraint, text
 
-from app.core.time import utc_now
+from app.core.time import now
 from app.models.base import Base, SoftDeleteMixin, TimestampMixin
 
 # ------------------------------------------------------------------------- 班级
@@ -56,7 +56,7 @@ class ClassStudentBase(SQLModel):
     class_id: int = Field(foreign_key="class_info.id", description="班级 ID")
     student_id: int = Field(foreign_key="sys_user.id", description="学生 ID")
     status: str = Field(default="ENROLLED", max_length=20, description="ENROLLED 在班 / LEFT 已离班")
-    enrolled_at: datetime = Field(default_factory=utc_now, description="入班时间")
+    enrolled_at: datetime = Field(default_factory=now, description="入班时间")
     left_at: datetime | None = Field(default=None, description="离班/转出时间（为空表示仍在班）")
 
 
@@ -84,7 +84,7 @@ class ClassStudent(Base, TimestampMixin, ClassStudentBase, table=True):
 class ClassStudentGroupBase(SQLModel):
     class_student_id: int = Field(foreign_key="class_student.id", unique=True, description="在班记录 ID")
     group_id: int = Field(foreign_key="class_group.id", description="分组 ID")
-    assigned_at: datetime = Field(default_factory=utc_now, description="分配时间")
+    assigned_at: datetime = Field(default_factory=now, description="分配时间")
     assigned_by: int | None = Field(default=None, foreign_key="sys_user.id", description="分配人 ID")
 
 

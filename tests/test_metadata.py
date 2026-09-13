@@ -75,6 +75,7 @@ def test_soft_delete_tables() -> None:
         "job",
         "skill_tree",
         "skill_node",
+        "project_stage_template",
         "training_project",
         "knowledge_doc",
     }

@@ -3,10 +3,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1.router import api_router
+from app.api.router import include_api_routers
 from app.core.config import settings
-from app.core.db import check_database
 from app.core.exceptions import register_exception_handlers
+from app.schemas.base import ErrorResponse
 
 OPENAPI_TAGS = [
     {"name": "系统", "description": "健康检查等基础接口"},
@@ -26,8 +26,19 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title=settings.app_name,
         version=settings.app_version,
-        description="岗位闯关式实训平台后端（P0 · 单学院）",
+        description=(
+            "岗位闯关式实训平台后端。\n\n"
+            "**统一响应体**：所有接口返回 `{code, data, msg}` —— 成功 `code=200`、`msg=ok`、"
+            "业务数据在 `data`；失败 `code=422`、错误提示在 `msg`、明细在 `data`。"
+        ),
         openapi_tags=OPENAPI_TAGS,
+        responses={
+            422: {
+                "model": ErrorResponse,
+                "description": "业务失败（HTTP 200，失败与否看 body 的 code=422）",
+            },
+            500: {"model": ErrorResponse, "description": "服务异常（body 的 code=500）"},
+        },
         docs_url="/docs",
         redoc_url="/redoc",
     )
@@ -42,15 +53,7 @@ def create_app() -> FastAPI:
         )
 
     register_exception_handlers(app)
-    app.include_router(api_router, prefix=settings.api_prefix)
-
-    @app.get("/health", tags=["系统"], summary="根路径健康检查")
-    async def root_health() -> dict[str, object]:
-        return {"ok": True, "app": settings.app_name, "version": settings.app_version}
-
-    @app.get("/health/db", tags=["系统"], summary="根路径数据库健康检查", include_in_schema=False)
-    async def root_health_db() -> dict[str, object]:
-        return await check_database()
+    include_api_routers(app, prefix=settings.api_prefix)
 
     return app
 
