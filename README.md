@@ -23,6 +23,23 @@ AI / 教师评审 → 技能进度与证书，另配套一套 RAG 知识库（�
 
 ## 跑起来
 
+### 一步启动（推荐）
+
+```bash
+scripts/start_all.sh                 # 中间件 → 建库 + 种子 → 启动后端（Ctrl-C 停后端）
+scripts/start_all.sh --with-demo     # 再灌一套演示数据（教师 / 班级 / 岗位 / 项目 / 闯关记录）
+scripts/start_all.sh --no-rag        # 只起 MinIO（不碰知识库检索也能开发）
+scripts/start_all.sh status          # 看各组件状态
+scripts/start_all.sh stop            # 停后端 + 停中间件
+```
+
+脚本做的事：起 MinIO + Milvus（等端口就绪）→ 检查模型权重（只提示不自动下）→
+`app.db.init_db` 建库与种子 → 启动 uvicorn 并等 `/api/health` 通过 → 打印访问地址。
+**幂等**：随时再跑一次不会坏数据；**Ctrl-C 只停后端**，中间件留着（容器重启要几十秒）。
+日志在 `data/run/backend.log`。
+
+### 手动分步（想自己控制每一步时）
+
 ```bash
 # 1. 依赖
 uv sync                 # 基础环境（不含 torch）
