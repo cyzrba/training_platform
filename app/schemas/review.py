@@ -88,7 +88,18 @@ class ReviewAiJobRead(CreatedAtRead, ReviewAiJobBase):
     id: int
 
 
+class AiReviewOut(SQLModel):
+    """一次 AI 评审的结果：评审记录 + 这次用到的评分标准来源（可追溯）。"""
+
+    review: ReviewRecordRead = Field(description="落库的评审记录")
+    criteria_doc_ids: list[int] = Field(default_factory=list, description="本次召回用到的评分标准文档 ID")
+    recalled_chunks: int = Field(default=0, description="召回的评分标准片段数")
+    model: str = Field(description="打分用的模型")
+    warnings: list[str] = Field(default_factory=list, description="降级提示（如向量召回不可用）")
+
+
 __all__ = [
+    "AiReviewOut",
     "DimensionScore",
     "ReviewAiJobCreate",
     "ReviewAiJobRead",

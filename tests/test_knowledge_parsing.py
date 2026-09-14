@@ -5,7 +5,7 @@ import io
 import pytest
 
 from app.core.exceptions import BusinessRuleError
-from app.services.parsing import parse
+from app.services.parsing import looks_binary, parse, sniff_suffix
 from app.services.splitting import split_document, strategy_name
 
 # ------------------------------------------------------------------ 解析
@@ -29,6 +29,24 @@ def test_parse_txt_splits_by_blank_line() -> None:
 
     assert [block.text for block in document.blocks] == ["第一段内容。", "第二段内容。"]
     assert all(block.heading_path == "" for block in document.blocks)
+
+
+def test_binary_attachment_is_rejected_not_decoded_as_text() -> None:
+    """图片/压缩包不能被当成文本"解析成功"。
+
+    gb18030 几乎能解码任意字节序列，只看"解码是否成功"会把 PNG 变成一段乱码正文，
+    于是附件被当成有效内容喂给模型、评分标准被当成有效标准入库。必须按文件头挡掉。
+    """
+    png = b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 4
+    assert looks_binary(png) is True
+    assert sniff_suffix(png) is None
+    with pytest.raises(BusinessRuleError, match="暂不支持解析"):
+        parse(png, filename="现场照片.png")
+
+    # 有 NUL 字节的未知二进制同样挡掉
+    assert sniff_suffix(b"some header\x00\x01\x02binary") is None
+    # 纯文本仍按 markdown 兜底（扩展名丢失时的既有行为）
+    assert sniff_suffix("这是一段没有扩展名的中文文本。".encode()) == ".md"
 
 
 def test_parse_txt_falls_back_to_gbk() -> None:
@@ -189,6 +207,52 @@ def test_split_separates_by_page_for_pdf_like_blocks() -> None:
     chunks = split_document(document, chunk_size_chars=100, overlap_chars=10, max_chunk_chars=1000)
 
     assert [chunk.page_no for chunk in chunks] == [1, 2]
+
+
+def test_whole_document_split_keeps_headings_and_makes_one_chunk() -> None:
+    """整份切分：一份标准就是一块，且分节标题要回到正文里。
+
+    解析阶段把 ``##`` 收进了 heading_path，正文里没有；整份切分不还原标题的话，
+    模型拿到的标准就没有"一、需求分析（10 分）"这类分节名，没法把条款和关卡对应起来。
+    """
+    content = (
+        "# 评分标准\n\n总分 100 分。\n\n"
+        "## 一、需求分析（10 分）\n\n必须覆盖六项，每缺一项扣 1.5 分。\n\n"
+        "## 二、方案设计（15 分）\n\n只写结论每项扣 1 分。\n"
+    ).encode()
+    document = parse(content, filename="评分标准.md")
+
+    chunks = split_document(document, whole=True)
+    assert len(chunks) == 1
+    text = chunks[0].content
+    assert text.startswith("## 评分标准")  # 一级标题也还原回来了
+    assert "一、需求分析（10 分）" in text
+    assert "二、方案设计（15 分）" in text
+    assert "必须覆盖六项" in text and "只写结论每项扣 1 分" in text
+    assert chunks[0].heading_path == ""
+    assert chunks[0].char_count == len(text)
+
+    # 同一份内容按结构化切分仍是多片——两条路径互不影响
+    assert len(split_document(document)) == 3
+
+
+def test_build_plan_routes_strategy_by_doc_type() -> None:
+    """评分标准整份一块；知识库资料仍然结构化细切。"""
+    from app.models.enums import KnowledgeDocType
+    from app.services.knowledge_ingest import build_plan
+
+    content = (
+        "# 评分标准\n\n## 一、需求分析（10 分）\n\n必须覆盖六项。\n\n"
+        "## 二、方案设计（15 分）\n\n必须给出推导。\n"
+    ).encode()
+
+    criteria = build_plan(content, "标准.md", doc_type=KnowledgeDocType.EVAL_CRITERIA)
+    assert criteria.strategy == "whole_document"
+    assert len(criteria.chunks) == 1
+
+    knowledge = build_plan(content, "资料.md", doc_type=KnowledgeDocType.KNOWLEDGE)
+    assert knowledge.strategy == "v1_structural_800"
+    assert len(knowledge.chunks) == 2  # 两个小节各自成片
 
 
 def test_content_hash_ignores_whitespace_difference() -> None:

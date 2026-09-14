@@ -1,0 +1,102 @@
+"""设置主模型（``system_config`` 里的 ``ai.llm``）：换模型 / 换 base_url / 换 api key。
+
+配置放在表里而不是 ``.env``，所以改完**不用重启服务**（读缓存 60 秒；脚本会顺手清掉）。
+
+用法：
+    uv run python scripts/set_llm_config.py --show
+    uv run python scripts/set_llm_config.py --model deepseek-v4-flash --base-url https://api.deepseek.com/v1
+    LLM_API_KEY=sk-xxx uv run python scripts/set_llm_config.py --api-key-env LLM_API_KEY
+
+**api key 不要写成命令行参数**：``--api-key`` 会进 shell 历史与进程列表。
+推荐用 ``--api-key-env`` 从环境变量读，或 ``--api-key-stdin`` 从标准输入读。
+"""
+
+import argparse
+import asyncio
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.core.db import SessionLocal  # noqa: E402
+from app.core.secrets import mask_secrets  # noqa: E402
+from app.crud.account import SystemConfigRepository  # noqa: E402
+from app.services import settings_store  # noqa: E402
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="设置 system_config 里的 ai.llm")
+    parser.add_argument("--show", action="store_true", help="只打印当前配置（api key 打码）")
+    parser.add_argument("--model", help="模型名，如 deepseek-v4-flash")
+    parser.add_argument("--base-url", dest="base_url", help="OpenAI 兼容端点，如 https://api.deepseek.com/v1")
+    parser.add_argument("--provider", help="供应商标识，默认 openai-compatible")
+    parser.add_argument("--temperature", type=float, help="采样温度")
+    parser.add_argument("--timeout", type=int, help="请求超时（秒）")
+    parser.add_argument("--max-tokens", dest="max_tokens", type=int, help="单次最大输出 token")
+    parser.add_argument("--api-key-env", help="从该环境变量读 api key（推荐）")
+    parser.add_argument("--api-key-stdin", action="store_true", help="从标准输入读 api key")
+    parser.add_argument("--api-key", help="直接给 api key（会进 shell 历史，仅调试用）")
+    parser.add_argument("--clear-api-key", action="store_true", help="清空 api key")
+    return parser
+
+
+def _collect(args: argparse.Namespace) -> dict[str, Any]:
+    updates: dict[str, Any] = {}
+    for key in ("model", "base_url", "provider", "temperature", "timeout", "max_tokens"):
+        value = getattr(args, key)
+        if value is not None:
+            updates[key] = value
+    if args.clear_api_key:
+        updates["api_key"] = ""
+    elif args.api_key_env:
+        value = os.environ.get(args.api_key_env)
+        if not value:
+            raise SystemExit(f"环境变量 {args.api_key_env} 是空的")
+        updates["api_key"] = value.strip()
+    elif args.api_key_stdin:
+        updates["api_key"] = sys.stdin.readline().strip()
+    elif args.api_key:
+        updates["api_key"] = args.api_key.strip()
+    return updates
+
+
+async def main() -> None:
+    args = _parser().parse_args()
+    async with SessionLocal() as session:
+        repo = SystemConfigRepository(session)
+        row = await repo.by_key(settings_store.LLM_KEY)
+        current: dict[str, Any] = dict(row.config_value) if row and isinstance(row.config_value, dict) else {}
+        merged = {**settings_store.DEFAULTS[settings_store.LLM_KEY], **current}
+
+        if args.show:
+            print(f"{settings_store.LLM_KEY} = {mask_secrets(merged)}")
+            print(f"api key {'已配置' if merged.get('api_key') else '未配置'}")
+            return
+
+        updates = _collect(args)
+        if not updates:
+            raise SystemExit("没有要改的内容；加 --help 看用法，或加 --show 只看当前值")
+        merged.update(updates)
+
+        if row is None:
+            await repo.create(
+                {
+                    "config_key": settings_store.LLM_KEY,
+                    "config_value": merged,
+                    "description": "主模型（DeepSeek，OpenAI 兼容接口）参数与 api key",
+                }
+            )
+        else:
+            await repo.update(row, {"config_value": merged})
+        await session.commit()
+
+    settings_store.invalidate(settings_store.LLM_KEY)
+    changed = ", ".join(sorted(updates))
+    print(f"已更新 {settings_store.LLM_KEY}：{changed}")
+    print(f"当前：{mask_secrets(merged)}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

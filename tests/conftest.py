@@ -1,10 +1,11 @@
 """测试夹具：内存 SQLite 数据库（复用生产同款 PRAGMA 设置）。"""
 
 import os
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Iterator
 from typing import Any
 
 import httpx
+import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.pool import StaticPool
@@ -15,11 +16,24 @@ from app.core.db import create_engine
 from app.core.db import get_db as real_get_db
 from app.main import app
 from app.models import Base
+from app.services import qa as qa_service
 from app.services import storage
 
 MINIO_ENDPOINT = os.environ.get("TEST_S3_ENDPOINT", "http://127.0.0.1:9000")
 #: 测试对象单独放一个桶，和开发桶 training-platform 里的真实文件隔离
 TEST_BUCKET = os.environ.get("TEST_S3_BUCKET", "training-platform-test")
+
+
+@pytest.fixture(autouse=True)
+def reset_qa_process_state() -> Iterator[None]:
+    """问答的"在飞提问"与频控窗口是进程级状态，用例之间必须清干净。
+
+    每个用例用的是全新的内存库，会话 id 会从 1 重来；不清的话上一个用例留下的
+    ``_inflight[1]`` 会把下一个用例的会话误判成"还有回答在生成"。
+    """
+    qa_service.reset_limits()
+    yield
+    qa_service.reset_limits()
 
 
 @pytest_asyncio.fixture(autouse=True)

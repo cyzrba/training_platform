@@ -17,10 +17,12 @@ from app.crud.review import ReviewRecordRepository
 from app.models.review import ReviewRecord
 from app.schemas.base import ApiResponse, MessageOut, Page
 from app.schemas.review import (
+    AiReviewOut,
     ReviewRecordRead,
     ReviewRecordUpdate,
     SubmissionReviewIn,
 )
+from app.services import ai_review
 from app.services.attempt import finalize_review, resolve_conclusion
 
 router = APIRouter(route_class=EnvelopeRoute, tags=["闯关评审"])
@@ -99,6 +101,37 @@ async def list_submission_reviews(
 ) -> list[ReviewRecord]:
     await _submission_or_404(submissions, submission_id)
     return await reviews.list_of_submission(submission_id)
+
+
+@router.post(
+    "/submissions/{submission_id}/ai-review",
+    response_model=ApiResponse[AiReviewOut],
+    status_code=status.HTTP_201_CREATED,
+    summary="触发 AI 评审：RAG 召回本项目的评分标准 → 大模型打分 → 落库并结算",
+)
+async def run_submission_ai_review(
+    submission_id: int,
+    db: DbSession,
+    submissions: SubmissionRepo,
+    reviews: ReviewRepo,
+) -> AiReviewOut:
+    """一次完整的 AI 评审。
+
+    评分标准只在校内链路检索（``doc_type=EVAL_CRITERIA``），学生端没有任何入口能读到；
+    评审用的模型、api key、检索参数都来自 ``system_config``，换模型不用改代码。
+    """
+    await _submission_or_404(submissions, submission_id)
+    outcome = await ai_review.run_ai_review(db, submission_id=submission_id)
+    review = await reviews.get(outcome.review_id)
+    if review is None:  # 理论上不会发生：刚创建就被删掉了
+        raise NotFoundError(f"评审记录 {outcome.review_id} 不存在")
+    return AiReviewOut(
+        review=ReviewRecordRead.model_validate(review, from_attributes=True),
+        criteria_doc_ids=outcome.criteria_doc_ids,
+        recalled_chunks=outcome.recalled_chunks,
+        model=outcome.model,
+        warnings=outcome.warnings,
+    )
 
 
 @router.post(

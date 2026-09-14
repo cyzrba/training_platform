@@ -321,7 +321,7 @@ async def finalize_review(
         return submission, None
 
     score = review.total_score
-    was_completed = record.status == "COMPLETED"
+    was_completed = record.completed_at is not None
     if conclusion == "PASS":
         best = record.best_score if record.best_score is not None else Decimal(0)
         await records.update(
@@ -338,8 +338,19 @@ async def finalize_review(
         await attempts.update(attempt, {"status": "COMPLETED", "finished_at": now(), "total_score": score})
         # 项目完成 → 该项目关联的技能点进度重算
         await sync_skills_after_project_completed(session, record.student_id, record.project_id)
+    # 不通过：分两种情况，差别很大
+    elif await _has_passing_review(session, student_id=record.student_id, project_id=record.project_id):
+        # ① 此前有过通过的轮次 → **项目保持完成，技能进度与成绩快照都不动**。
+        #    技能点亮表示"曾经达成过这个能力"；重复挑战是给学生一次刷高分的机会，
+        #    失败了不该把已有成果抹掉，否则学生根本不敢重新挑战。
+        #    这次不及格只体现在本轮 submission / attempt 上（学生看得到自己这轮多少分）。
+        # completed_at 缺失时补回来，维持 "status=COMPLETED ⇒ completed_at 非空" 这个不变量
+        # （技能进度的分子按 completed_at 统计，两者不能脱节）
+        repaired = {"completed_at": now()} if record.completed_at is None else {}
+        await records.update(record, {"status": "COMPLETED", **repaired})
+        await attempts.update(attempt, {"status": "IN_PROGRESS", "total_score": score})
     else:
-        # 教师改判不通过：如果项目此前已被 AI 判完成，这里要撤销完成并回滚技能进度
+        # ② 一次都没通过（或唯一那条通过评审被教师改判了）→ 撤销完成并回滚技能进度
         stages = AttemptStageRepository(session)
         total_stages = len(await stages.list_of_attempt(attempt.id))
         rollback = {
@@ -358,6 +369,44 @@ async def finalize_review(
             # 项目不再是 COMPLETED，重算后进度会回落
             await sync_skills_after_project_completed(session, record.student_id, record.project_id)
     return submission, record
+
+
+async def _has_passing_review(session: AsyncSession, *, student_id: int, project_id: int) -> bool:
+    """这个学生在该项目下是否还有仍然有效的"通过"结论（跨所有闯关轮次）。
+
+    判定口径：**每份提交只看它最新的一条定稿评审**，再看有没有哪份提交的结论是通过。
+
+    - 重复挑战不通过 → 那是**新的一份提交**，旧提交上那条 PASS 依然有效 → 保持完成、技能不掉；
+    - 教师在同一份提交上改判不通过 → 该提交的最新结论变成 FAIL，通过结论被覆盖
+      → 如果所有提交都没有通过结论了，才撤销完成、回滚技能。
+
+    这两件事性质不同：前者是"新一次没做好"，后者是"原来那个判定不成立"。
+    只用"有没有出现过 PASS"判断会把教师改判漏掉；只用"最近一次"判断又会把重复挑战失败误判成回滚。
+    """
+    from sqlmodel import func, select
+
+    # 每份提交的最新一条定稿评审（教师复审/改判会产出更新的记录，从而覆盖 AI 的结论）
+    latest_final = (
+        select(ReviewRecord.submission_id, func.max(ReviewRecord.id).label("latest_id"))
+        .where(ReviewRecord.status == "FINAL")
+        .group_by(ReviewRecord.submission_id)  # type: ignore[arg-type]
+        .subquery()
+    )
+
+    stmt = (
+        select(func.count())
+        .select_from(ReviewRecord)
+        .join(latest_final, latest_final.c.latest_id == ReviewRecord.id)  # type: ignore[arg-type]
+        .join(ProjectSubmission, ProjectSubmission.id == ReviewRecord.submission_id)  # type: ignore[arg-type]
+        .join(TrainingAttempt, TrainingAttempt.id == ProjectSubmission.attempt_id)  # type: ignore[arg-type]
+        .join(StudentProject, StudentProject.id == TrainingAttempt.student_project_id)  # type: ignore[arg-type]
+        .where(
+            StudentProject.student_id == student_id,
+            StudentProject.project_id == project_id,
+            ReviewRecord.conclusion == "PASS",
+        )
+    )
+    return int((await session.exec(stmt)).one()) > 0
 
 
 __all__ = [

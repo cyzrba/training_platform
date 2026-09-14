@@ -44,14 +44,21 @@ async def _published_project_counts(session: AsyncSession) -> dict[int, int]:
 
 
 async def _completed_counts(session: AsyncSession, student_id: int) -> dict[int, int]:
-    """该学生"已完成项目"覆盖到的技能节点计数（分子）。"""
+    """该学生"已完成项目"覆盖到的技能节点计数（分子）。
+
+    判定用 ``completed_at is not None`` 而**不是** ``status == "COMPLETED"``：
+    学生重新挑战一个已完成项目时，``start_attempt`` 会把 status 拉回 IN_PROGRESS，
+    但那个项目只是"正在重挑、还没出结果"，不该从完成数里被扣掉——
+    否则他一边重挑项目甲、一边做项目乙，乙一通过就会把甲的进度一起抹掉。
+    ``completed_at`` 只在首次通过时写入、改判不通过时清空，正好是"当前是否计入完成"的标记。
+    """
     stmt = (
         select(ProjectSkill.skill_node_id, func.count())
         .join(StudentProject, StudentProject.project_id == ProjectSkill.project_id)  # type: ignore[arg-type]
         .join(TrainingProject, TrainingProject.id == ProjectSkill.project_id)  # type: ignore[arg-type]
         .where(
             StudentProject.student_id == student_id,
-            StudentProject.status == "COMPLETED",
+            StudentProject.completed_at.is_not(None),  # type: ignore[attr-defined]
             TrainingProject.status == "PUBLISHED",
             TrainingProject.deleted_at.is_(None),  # type: ignore[attr-defined]
         )

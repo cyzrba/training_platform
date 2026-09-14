@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     #: 单文件大小上限（MB）
     max_upload_mb: int = 50
 
+    #: 评分标准这类"整份使用"的文档，正文不超过这个长度就整份作为一块；
+    #: 超过则回落到结构化切分（保持与向量模型 8192 token 窗口的安全距离）
+    knowledge_whole_doc_max_chars: int = 6000
+
     #: 文件存储：S3 协议对象存储（MinIO、OSS、AWS S3 都走 s3 协议），文件本体不进库
     s3_endpoint: str = ""  # 如 http://127.0.0.1:9000
     s3_access_key: str = ""

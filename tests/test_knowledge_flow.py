@@ -103,31 +103,35 @@ async def _upload_criteria(
 
 @pytest.mark.asyncio
 async def test_upload_criteria_creates_doc_and_chunks(client: httpx.AsyncClient) -> None:
-    """上传评分标准 → 建知识文档 + 结构化切片（标题路径进切片，状态 PENDING）。"""
+    """上传评分标准 → 整份作为一块。
+
+    评分标准是"整份对照着用"的文档，按标题拆成十几片反而会在超出上下文预算后
+    让后面的关卡拿不到条款，所以走 ``whole_document`` 策略（见 splitting.py）。
+    """
     project = await _create_project(client)
     uploaded = await _upload_criteria(client, project["id"])
 
     assert uploaded["file_kind"] == "SCORING_CRITERIA"
     assert uploaded["knowledge_status"] == "READY"
-    assert uploaded["chunk_count"] >= 3
+    assert uploaded["chunk_count"] == 1
     assert uploaded["knowledge_error"] is None
     doc_id = uploaded["knowledge_doc_id"]
 
     detail = (await client.get(f"/api/knowledge/docs/{doc_id}")).json()
     assert detail["doc_type"] == "EVAL_CRITERIA"
     assert detail["total_chunks"] == uploaded["chunk_count"]
-    assert detail["chunk_strategy"] == "v1_structural_800"
+    assert detail["chunk_strategy"] == "whole_document"
     assert detail["original_name"] == "评分标准.md"
 
     chunks = (await client.get(f"/api/knowledge/docs/{doc_id}/chunks", params={"page_size": 50})).json()
     assert chunks["total"] == uploaded["chunk_count"]
-    heading_paths = [item["heading_path"] for item in chunks["items"]]
-    assert "实训报告评分标准 > 三、数据处理（20 分）" in heading_paths
     assert all(item["status"] == "PENDING" for item in chunks["items"])
     assert all(item["char_count"] == len(item["content"]) for item in chunks["items"])
-    # 标题路径前置在正文里，检索时标题词也能命中
-    analysis = next(item for item in chunks["items"] if "需求分析" in item["content"])
-    assert analysis["content"].startswith("实训报告评分标准 > 一、需求分析（20 分）")
+    # 分节标题要写回正文：模型靠它把条款和关卡对应起来
+    content = chunks["items"][0]["content"]
+    assert "一、需求分析（20 分）" in content
+    assert "二、方案设计（30 分）" in content
+    assert "三、数据处理（20 分）" in content
 
 
 @pytest.mark.asyncio

@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 
-from sqlmodel import select
+from sqlmodel import delete, func, select
 
 from app.crud.base import BaseRepository
 from app.models.knowledge import KnowledgeChunk, KnowledgeDoc
@@ -52,6 +52,20 @@ class KnowledgeChunkRepository(BaseRepository[KnowledgeChunk]):
     async def doc_ids_with_chunks(self) -> list[int]:
         stmt = select(KnowledgeChunk.doc_id).distinct()
         return [int(item) for item in (await self.session.exec(stmt)).all()]
+
+    async def delete_of_doc(self, doc_id: int) -> int:
+        """物理删除某文档下的全部切片，返回删除条数。
+
+        切片是**派生数据**：正文永远能从源文件重新解析出来，所以删文档时直接物理删除，
+        不留 DISABLED 的孤儿行（那些行还带着完整正文，白占空间又容易被误召回）。
+        """
+        result = await self.session.exec(delete(KnowledgeChunk).where(KnowledgeChunk.doc_id == doc_id))
+        await self.session.flush()
+        return int(result.rowcount or 0)  # type: ignore[attr-defined]
+
+    async def count_of_doc(self, doc_id: int) -> int:
+        stmt = select(func.count()).select_from(KnowledgeChunk).where(KnowledgeChunk.doc_id == doc_id)
+        return int((await self.session.exec(stmt)).one())
 
 
 __all__ = ["KnowledgeChunkRepository", "KnowledgeDocRepository"]

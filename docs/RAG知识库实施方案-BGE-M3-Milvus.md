@@ -241,19 +241,26 @@ from pymilvus import AnnSearchRequest, RRFRanker
 FLT = f'doc_id in {doc_ids} and status == "READY"'  # 权限与状态在检索阶段过滤
 
 req_dense = AnnSearchRequest(
-    [q_dense], "dense",
+    [q_dense],
+    "dense",
     {"metric_type": "COSINE", "params": {"ef": 96}},
-    limit=50, expr=FLT,
+    limit=50,
+    expr=FLT,
 )
 req_sparse = AnnSearchRequest(
-    [q_sparse], "sparse",
+    [q_sparse],
+    "sparse",
     {"metric_type": "IP", "params": {"drop_ratio_search": 0.2}},
-    limit=50, expr=FLT,
+    limit=50,
+    expr=FLT,
 )
 
 hits = client.hybrid_search(
-    COLLECTION, [req_dense, req_sparse], RRFRanker(60),
-    limit=40, output_fields=["doc_id", "chunk_index", "text", "status"],
+    COLLECTION,
+    [req_dense, req_sparse],
+    RRFRanker(60),
+    limit=40,
+    output_fields=["doc_id", "chunk_index", "text", "status"],
 )
 ```
 

@@ -27,6 +27,20 @@ from app.core.exceptions import BusinessRuleError
 #: 支持的扩展名
 SUPPORTED_SUFFIXES = frozenset({".md", ".markdown", ".txt", ".csv", ".docx", ".pdf", ".xlsx"})
 
+#: 常见二进制文件头。命中就不再做文本兜底——否则图片、压缩包会被 gb18030
+#: "解码成功"成一段乱码正文，解析环节当成有效内容收下（验收标准传成截图时会踩到）。
+_BINARY_MAGICS = (
+    b"\x89PNG\r\n\x1a\n",  # PNG
+    b"\xff\xd8\xff",  # JPEG
+    b"GIF87a",
+    b"GIF89a",
+    b"\x1f\x8b",  # gzip
+    b"RIFF",  # webp / wav / avi
+    b"\x7fELF",  # 可执行文件
+    b"\xd0\xcf\x11\xe0",  # 旧版 Office（.doc/.xls）
+    b"BM",  # bmp
+)
+
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 
 
@@ -79,6 +93,8 @@ def sniff_suffix(content: bytes) -> str | None:
 
     - ``%PDF-`` → PDF；
     - ``PK\\x03\\x04``（zip 容器）→ 含 ``word/`` 判 docx、含 ``xl/`` 判 xlsx；
+    - 命中 :data:`_BINARY_MAGICS` 或含 NUL 字节 → 认定是二进制，返回 ``None``（不支持的格式），
+      不再走文本兜底；
     - 能按文本解码的 → 当 markdown 处理（标题、段落解析规则一致）。
     """
     head = content[:4096]
@@ -90,6 +106,8 @@ def sniff_suffix(content: bytes) -> str | None:
         if b"xl/" in head:
             return ".xlsx"
         return None
+    if looks_binary(content):
+        return None
     for encoding in ("utf-8", "gb18030"):
         try:
             content.decode(encoding)
@@ -97,6 +115,17 @@ def sniff_suffix(content: bytes) -> str | None:
             continue
         return ".md"
     return None
+
+
+def looks_binary(content: bytes) -> bool:
+    """粗略判断是不是二进制：命中已知文件头，或采样片段里含 NUL 字节。
+
+    NUL 是文本文件里几乎不会出现的字节，用它挡二进制比"能不能解码"可靠得多——
+    gb18030 几乎能解码任意字节序列，只看解码成功会漏掉图片、压缩包。
+    """
+    if any(content.startswith(magic) for magic in _BINARY_MAGICS):
+        return True
+    return b"\x00" in content[:4096]
 
 
 def decode_text(content: bytes) -> str:
@@ -282,4 +311,12 @@ def _parse_pdf(content: bytes) -> ParsedDocument:
     return document
 
 
-__all__ = ["SUPPORTED_SUFFIXES", "ParsedBlock", "ParsedDocument", "decode_text", "parse", "sniff_suffix"]
+__all__ = [
+    "SUPPORTED_SUFFIXES",
+    "ParsedBlock",
+    "ParsedDocument",
+    "decode_text",
+    "looks_binary",
+    "parse",
+    "sniff_suffix",
+]

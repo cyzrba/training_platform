@@ -21,8 +21,10 @@ CACHE_TTL_SECONDS = 60
 
 EMBEDDING_KEY = "ai.embedding"
 RERANKER_KEY = "ai.reranker"
+LLM_KEY = "ai.llm"
 MILVUS_KEY = "rag.vector_store"
 RETRIEVAL_KEY = "rag.retrieval"
+QA_KEY = "ai.qa"
 
 #: 配置键 -> 默认值。种子数据（app/db/seed.py）与这里保持一致，表里没有也能跑
 DEFAULTS: dict[str, dict[str, Any]] = {
@@ -45,6 +47,15 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "batch_size": 16,
         "max_length": 1024,
     },
+    LLM_KEY: {
+        "provider": "openai-compatible",
+        "base_url": "https://api.deepseek.com/v1",
+        "model": "deepseek-v4-flash",
+        "api_key": "",  # 只存在这里；接口读取一律掩码（app/core/secrets.py）
+        "temperature": 0.2,
+        "timeout": 60,
+        "max_tokens": 4096,
+    },
     MILVUS_KEY: {
         "provider": "milvus",
         "uri": "http://127.0.0.1:19530",
@@ -60,6 +71,29 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "context_top_n": 6,
         "score_threshold": 0.3,
         "rrf_k": 60,
+        # 评分标准喂给大模型的总字符预算。评分场景要的是"每个维度都有依据"，
+        # 按条数截断会静默丢掉排在后面的维度，所以这里用字符预算（可随模型上下文调整）。
+        "criteria_max_chars": 60000,
+        # 长标准按关卡分维度召回时，每个维度保底取几片
+        "criteria_top_k_per_dimension": 4,
+    },
+    QA_KEY: {
+        # 留空则用 app/services/qa.py 里的内置提示词；这里只在需要覆盖时填
+        "system_prompt": "",
+        # 上下文窗口：最近 3 轮（1 轮 = 1 问 + 1 答），当前这一问不计入
+        "history_rounds": 3,
+        # 字符双保险：单轮贴了长文时按"轮"丢弃，不是按条截
+        "history_max_chars": 6000,
+        # 历史保留天数：查询层过滤 + scripts/prune_qa_history.py 定时清理
+        "history_retention_days": 7,
+        "max_question_chars": 2000,
+        "temperature": 0.3,
+        "timeout": 60,
+        # 一期 none（不检索，引用恒为空）/ 二期 knowledge（接 Milvus）
+        "context_provider": "none",
+        "context_top_n": 6,
+        "score_threshold": 0.3,
+        "rate_limit_per_minute": 10,
     },
 }
 
@@ -122,12 +156,49 @@ class MilvusConfig:
 
 
 @dataclass(frozen=True)
+class LLMConfig:
+    """主模型（OpenAI 兼容接口）配置：换模型 / 换 key 只改配置，不动代码。"""
+
+    provider: str
+    base_url: str
+    model: str
+    api_key: str
+    temperature: float
+    timeout: int
+    max_tokens: int
+
+    @property
+    def configured(self) -> bool:
+        """没填 api key 时调用方应先给出可读的提示，而不是等 SDK 抛鉴权错误。"""
+        return bool(self.api_key.strip())
+
+
+@dataclass(frozen=True)
 class RetrievalConfig:
     retrieve_top_k: int
     rerank_top_k: int
     context_top_n: int
     score_threshold: float
     rrf_k: int
+    criteria_max_chars: int
+    criteria_top_k_per_dimension: int
+
+
+@dataclass(frozen=True)
+class QaConfig:
+    """AI 问答的运行参数（上下文窗口、保留期、频控）。模型与 key 仍复用 ai.llm。"""
+
+    system_prompt: str
+    history_rounds: int
+    history_max_chars: int
+    history_retention_days: int
+    max_question_chars: int
+    temperature: float
+    timeout: int
+    context_provider: str
+    context_top_n: int
+    score_threshold: float
+    rate_limit_per_minute: int
 
 
 def invalidate(key: str | None = None) -> None:
@@ -193,6 +264,19 @@ async def get_milvus_config(session: AsyncSession) -> MilvusConfig:
     )
 
 
+async def get_llm_config(session: AsyncSession) -> LLMConfig:
+    raw = await _raw(session, LLM_KEY)
+    return LLMConfig(
+        provider=str(raw.get("provider", "openai-compatible")),
+        base_url=str(raw.get("base_url", "https://api.deepseek.com/v1")),
+        model=str(raw.get("model", "deepseek-v4-flash")),
+        api_key=str(raw.get("api_key") or ""),
+        temperature=float(raw.get("temperature", 0.2)),
+        timeout=int(raw.get("timeout", 60)),
+        max_tokens=int(raw.get("max_tokens", 4096)),
+    )
+
+
 async def get_retrieval_config(session: AsyncSession) -> RetrievalConfig:
     raw = await _raw(session, RETRIEVAL_KEY)
     return RetrievalConfig(
@@ -201,18 +285,43 @@ async def get_retrieval_config(session: AsyncSession) -> RetrievalConfig:
         context_top_n=int(raw.get("context_top_n", 6)),
         score_threshold=float(raw.get("score_threshold", 0.3)),
         rrf_k=int(raw.get("rrf_k", 60)),
+        criteria_max_chars=int(raw.get("criteria_max_chars", 60000)),
+        criteria_top_k_per_dimension=int(raw.get("criteria_top_k_per_dimension", 4)),
+    )
+
+
+async def get_qa_config(session: AsyncSession) -> QaConfig:
+    raw = await _raw(session, QA_KEY)
+    return QaConfig(
+        system_prompt=str(raw.get("system_prompt") or ""),
+        history_rounds=max(1, int(raw.get("history_rounds", 3))),
+        history_max_chars=max(1, int(raw.get("history_max_chars", 6000))),
+        history_retention_days=max(1, int(raw.get("history_retention_days", 7))),
+        max_question_chars=max(1, int(raw.get("max_question_chars", 2000))),
+        temperature=float(raw.get("temperature", 0.3)),
+        timeout=int(raw.get("timeout", 60)),
+        context_provider=str(raw.get("context_provider", "none")),
+        context_top_n=int(raw.get("context_top_n", 6)),
+        score_threshold=float(raw.get("score_threshold", 0.3)),
+        rate_limit_per_minute=max(0, int(raw.get("rate_limit_per_minute", 10))),
     )
 
 
 __all__ = [
     "CACHE_TTL_SECONDS",
     "DEFAULTS",
+    "LLM_KEY",
     "EmbeddingConfig",
+    "LLMConfig",
     "MilvusConfig",
+    "QA_KEY",
+    "QaConfig",
     "RerankerConfig",
     "RetrievalConfig",
     "get_embedding_config",
+    "get_llm_config",
     "get_milvus_config",
+    "get_qa_config",
     "get_reranker_config",
     "get_retrieval_config",
     "invalidate",

@@ -14,6 +14,7 @@ from app.api.endpoints import (
     knowledge,
     organization,
     projects,
+    qa,
     reviews,
 )
 
@@ -26,6 +27,7 @@ API_ROUTERS: tuple[APIRouter, ...] = (
     job_skill.router,
     projects.router,
     knowledge.router,
+    qa.router,
     attempts.router,
     reviews.router,
 )

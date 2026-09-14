@@ -132,7 +132,13 @@ def drop_collection(client: Any, config: MilvusConfig, *, keep_alias: bool = Fal
 
 
 def build_filter(*, doc_ids: list[int] | None = None, doc_type: str | None = None) -> str:
-    """组装标量过滤表达式：可见范围与 doc_type 必须在检索阶段过滤。"""
+    """组装标量过滤表达式：可见范围与 doc_type 必须在检索阶段过滤。
+
+    注意 ``doc_ids=None`` 与 ``doc_ids=[]`` 语义不同：``None`` = 不限制（仅内部调用），
+    空列表 = 一份可见文档都没有。空列表由 :func:`hybrid_search` 提前拦掉，
+    绝不能退化成"不过滤"——那会让可见范围内没有文档的调用方搜到全库内容
+    （学生问答链路一旦这样就是评分标准泄露）。
+    """
     clauses = ['status == "READY"']
     if doc_ids:
         joined = ", ".join(str(int(item)) for item in doc_ids)
@@ -157,6 +163,9 @@ def hybrid_search(
     from pymilvus import AnnSearchRequest, RRFRanker
 
     if not client.has_collection(config.collection_name):
+        return []
+    if doc_ids is not None and not doc_ids:
+        # 显式限定了可见范围但范围为空 → 没有可检索内容，直接返回空
         return []
     expr = build_filter(doc_ids=doc_ids, doc_type=doc_type)
     top_k = limit or retrieval.retrieve_top_k

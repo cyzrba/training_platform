@@ -264,7 +264,7 @@ out = model.encode(
     max_length=cfg["max_length"],
     return_dense=True,
     return_sparse=True,
-    return_colbert_vecs=False,     # colbert 多向量先不开，存储开销大
+    return_colbert_vecs=False,  # colbert 多向量先不开，存储开销大
 )
 # out["dense_vecs"]        -> (n, 1024) 已归一化
 # out["lexical_weights"]   -> list[dict[token_id, weight]]
@@ -303,12 +303,19 @@ Collection 物理名 `knowledge_chunk_v1`，对外**别名** `knowledge_chunk`�
 from pymilvus import AnnSearchRequest, RRFRanker
 
 FLT = f'doc_id in {doc_ids} and status == "READY"'
-req_dense = AnnSearchRequest([q_dense], "dense",
-    {"metric_type": "COSINE", "params": {"ef": 96}}, limit=50, expr=FLT)
-req_sparse = AnnSearchRequest([q_sparse], "sparse",
-    {"metric_type": "IP", "params": {"drop_ratio_search": 0.2}}, limit=50, expr=FLT)
-hits = client.hybrid_search(COLL, [req_dense, req_sparse], RRFRanker(60),
-    limit=40, output_fields=["doc_id", "chunk_index", "text", "doc_type"])
+req_dense = AnnSearchRequest(
+    [q_dense], "dense", {"metric_type": "COSINE", "params": {"ef": 96}}, limit=50, expr=FLT
+)
+req_sparse = AnnSearchRequest(
+    [q_sparse], "sparse", {"metric_type": "IP", "params": {"drop_ratio_search": 0.2}}, limit=50, expr=FLT
+)
+hits = client.hybrid_search(
+    COLL,
+    [req_dense, req_sparse],
+    RRFRanker(60),
+    limit=40,
+    output_fields=["doc_id", "chunk_index", "text", "doc_type"],
+)
 ```
 
 **权限过滤必须在检索阶段完成**，不能检索后再筛——后者会掉召回。

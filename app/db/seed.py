@@ -210,6 +210,19 @@ SYSTEM_CONFIGS: list[dict[str, Any]] = [
         "description": "重排模型（bge-reranker-v2-m3）参数",
     },
     {
+        "config_key": "ai.llm",
+        "config_value": {
+            "provider": "openai-compatible",
+            "base_url": "https://api.deepseek.com/v1",
+            "model": "deepseek-v4-flash",
+            "api_key": "",  # 由管理员在系统配置里填；接口读取一律掩码
+            "temperature": 0.2,
+            "timeout": 60,
+            "max_tokens": 4096,
+        },
+        "description": "主模型（DeepSeek，OpenAI 兼容接口）参数与 api key",
+    },
+    {
         "config_key": "rag.vector_store",
         "config_value": {
             "provider": "milvus",
@@ -230,8 +243,27 @@ SYSTEM_CONFIGS: list[dict[str, Any]] = [
             "context_top_n": 6,
             "score_threshold": 0.3,
             "rrf_k": 60,
+            "criteria_max_chars": 60000,
+            "criteria_top_k_per_dimension": 4,
         },
         "description": "检索与重排参数",
+    },
+    {
+        "config_key": "ai.qa",
+        "config_value": {
+            "system_prompt": "",  # 留空则用 app/services/qa.py 的内置提示词
+            "history_rounds": 3,  # 上下文窗口：最近 3 轮（1 轮 = 1 问 + 1 答）
+            "history_max_chars": 6000,  # 历史字符双保险，超出按"轮"丢弃
+            "history_retention_days": 7,  # 历史保留天数：查询层过滤 + 定时清理
+            "max_question_chars": 2000,
+            "temperature": 0.3,
+            "timeout": 60,
+            "context_provider": "none",  # 一期 none（不检索）/ 二期 knowledge
+            "context_top_n": 6,
+            "score_threshold": 0.3,
+            "rate_limit_per_minute": 10,
+        },
+        "description": "AI 问答参数（上下文窗口、保留期、频控；token 只统计不限制）",
     },
 ]
 

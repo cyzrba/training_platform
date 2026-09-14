@@ -11,14 +11,13 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 from sqlmodel import select
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.deps import DbSession, PageDep
 from app.core.exceptions import NotFoundError
 from app.core.response import EnvelopeRoute
 from app.crud.attempt import FileAssetRepository
 from app.crud.knowledge import KnowledgeChunkRepository, KnowledgeDocRepository
-from app.models.enums import KnowledgeChunkStatus, KnowledgeDocStatus
+from app.models.enums import KnowledgeDocStatus
 from app.models.knowledge import KnowledgeChunk, KnowledgeDoc
 from app.models.project import ProjectFile
 from app.schemas.base import ApiResponse, MessageOut, Page
@@ -31,7 +30,7 @@ from app.schemas.knowledge import (
     KnowledgeRecallIn,
     KnowledgeRecallOut,
 )
-from app.services import knowledge_ingest, retrieval, settings_store, vector_store
+from app.services import knowledge_ingest, retrieval
 
 router = APIRouter(route_class=EnvelopeRoute, tags=["知识库"])
 
@@ -63,7 +62,7 @@ async def _doc_or_404(repo: KnowledgeDocRepository, doc_id: int) -> KnowledgeDoc
     return doc
 
 
-def _ingest_out(doc: KnowledgeDoc) -> KnowledgeIngestOut:
+def _ingest_out(doc: KnowledgeDoc, warnings: list[str] | None = None) -> KnowledgeIngestOut:
     return KnowledgeIngestOut(
         knowledge_doc_id=doc.id or 0,
         doc_type=doc.doc_type,
@@ -71,6 +70,7 @@ def _ingest_out(doc: KnowledgeDoc) -> KnowledgeIngestOut:
         chunk_count=doc.total_chunks,
         chunk_strategy=doc.chunk_strategy,
         parse_error=doc.parse_error,
+        warnings=warnings or [],
     )
 
 
@@ -165,7 +165,7 @@ async def reparse_knowledge_doc(
 ) -> KnowledgeIngestOut:
     doc = await _doc_or_404(docs, doc_id)
     result = await knowledge_ingest.reparse_document(docs.session, doc)
-    return _ingest_out(result.doc)
+    return _ingest_out(result.doc, result.warnings)
 
 
 @router.post(
@@ -286,43 +286,32 @@ async def recall_knowledge(
 @router.delete(
     "/knowledge/docs/{doc_id}",
     response_model=ApiResponse[MessageOut],
-    summary="停用知识文档（软删 + 切片标 DISABLED + 清理 Milvus 向量）",
+    summary="删除知识文档（连带删除切片与 Milvus 向量）",
 )
-async def disable_knowledge_doc(
+async def delete_knowledge_doc(
     doc_id: int,
     session: DbSession,
     docs: KnowledgeDocRepo,
     chunks: KnowledgeChunkRepo,
 ) -> MessageOut:
     doc = await _doc_or_404(docs, doc_id)
-    # 停用要把三处一起收干净：文档状态、切片状态、Milvus 向量。
-    # 只改文档状态的话，向量还在（Milvus 里的 status 冗余字段仍是 READY），
-    # 不带 doc_id 的召回仍会命中已停用的内容。
-    for chunk in await chunks.list_of_doc(doc.id or 0):
-        await chunks.update(chunk, {"status": KnowledgeChunkStatus.DISABLED})
-    await docs.update(doc, {"status": KnowledgeDocStatus.DISABLED})
+    # 删除要把三处一起收干净：Milvus 向量 → 切片 → 文档。
+    # 顺序是先删"外面的"再删"里面的"：向量删不掉时（Milvus 挂了）不能把切片和文档
+    # 先删了，否则会留下搜得到、又没法回溯的脏命中。
+    warnings: list[str] = []
+    purge_warning = await knowledge_ingest.purge_vectors(session, doc.id or 0)
+    if purge_warning:
+        warnings.append(purge_warning)
+
+    # 切片是派生数据（能从源文件重新解析），直接物理删除，不留孤儿行
+    removed = await chunks.delete_of_doc(doc.id or 0)
+
+    await docs.update(doc, {"status": KnowledgeDocStatus.DISABLED, "total_chunks": 0})
     await docs.remove(doc)
-    warning = await _purge_vectors(session, doc)
-    if warning:
-        return MessageOut(message=f"知识文档 {doc_id} 已停用，切片标记为 DISABLED；{warning}")
-    return MessageOut(message=f"知识文档 {doc_id} 已停用，切片标记为 DISABLED，Milvus 向量已清理")
 
-
-async def _purge_vectors(session: AsyncSession, doc: KnowledgeDoc) -> str | None:
-    """删掉该文档在 Milvus 里的向量。
-
-    尽力而为：Milvus 挂掉或依赖没装时不让"停用"这个动作失败（否则脏数据就停不掉了），
-    而是把原因回给调用方——真源已经标停用，重建索引也不会把它带回来。
-    """
-    if not vector_store.milvus_available():
-        return "未安装 pymilvus，Milvus 里的旧向量没清理（uv sync --extra rag）"
-    try:
-        config = await settings_store.get_milvus_config(session)
-        client = vector_store.get_client(config.uri)
-        vector_store.delete_by_doc(client, config, doc.id or 0)
-    except Exception as exc:  # 任何失败都只降级提示，不让停用失败
-        return f"Milvus 旧向量没清理（{exc}），建议稍后重试或用 reindex 重建"
-    return None
+    message = f"知识文档 {doc_id} 已删除，连带删除 {removed} 条切片"
+    message += f"；{'；'.join(warnings)}" if warnings else "，Milvus 向量已清理"
+    return MessageOut(message=message)
 
 
 __all__ = ["router"]

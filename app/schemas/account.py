@@ -3,8 +3,10 @@
 from datetime import datetime
 from typing import Any
 
+from pydantic import field_serializer
 from sqlmodel import Field, SQLModel
 
+from app.core.secrets import mask_secrets
 from app.models.account import (
     SysPermissionBase,
     SysRoleBase,
@@ -176,6 +178,11 @@ class SystemConfigUpdate(SQLModel):
 
 class SystemConfigRead(UpdatedAtRead, SystemConfigBase):
     id: int
+
+    @field_serializer("config_value")
+    def _mask_secrets(self, value: dict[str, Any]) -> dict[str, Any]:
+        """出参统一脱敏：api key 之类的字段只回掩码，避免配置接口变成密钥泄露口。"""
+        return mask_secrets(value)
 
 
 __all__ = [
