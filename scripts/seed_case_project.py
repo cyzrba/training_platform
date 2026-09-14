@@ -3,10 +3,16 @@
 一次执行会完整走一遍真实业务链路：
 
     建项目（七个标准模块 + 每个模块的引导子标题）
+      → 关联项目所需技能点（评审通过后技能进度按它推进）
       → 上传报告模板与评分标准（评分标准自动入库 + 向量化）
-      → 建学生 → 开始闯关 → 逐关卡按子标题填写作答
+      → 建学生 → 入班 → 选岗（并把项目技能点补进该岗位）
+      → 开始闯关 → 逐关卡按子标题填写作答
       → 把写好的实训报告作为附件挂到"实训报告上传"关卡 → 整单提交
       → 触发 AI 评审（RAG 召回本项目的评分标准 → DeepSeek 打分 → 落库结算）
+
+为什么要连班级和岗位一起造：审核列表的"班级"列、数据总览的"在读学生 / 岗位热度"、
+学习过程统计的"班级 / 岗位"、技能树与技能进度**都挂在这两条关联上**。只造项目与作答，
+这些页面就是空的；技能进度更是完全不动（`project_skill` 是技能推进的唯一入口）。
 
 用法：
     uv run python scripts/seed_case_project.py                 # 全流程（会真实调用大模型）
@@ -35,6 +41,26 @@ from app.core.db import get_db as real_get_db  # noqa: E402
 from app.main import app  # noqa: E402
 
 PROJECT_NAME = "工业视觉检测项目·TO-220 三端稳压管引脚缺陷检测"
+
+#: 案例学生要落的班级（不存在则创建）：做报表、看板、导出都按班级聚合
+CLASS_NAME = "人工智能2401班"
+
+#: 案例学生要选的岗位（不存在则创建）
+JOB_NAME = "工业视觉工程师"
+
+#: 本项目要推进的技能点：(技能树 code, 技能树名, 技能节点 code, 技能节点名)
+#: 照案例的交付环节挑的：光学选型 → 图像处理 → 模型训练调优 → 产线联调。
+#: 节点缺失会在对应技能树下补建，所以脚本不依赖种子数据是否跑过。
+PROJECT_SKILL_NODES: list[tuple[str, str, str, str]] = [
+    ("OPTICAL_IMAGING", "光学成像系", "LIGHT_SELECT", "光源选型"),
+    ("OPTICAL_IMAGING", "光学成像系", "CAMERA_SELECT", "相机选型"),
+    ("OPTICAL_IMAGING", "光学成像系", "PIN_DEFECT", "引脚缺陷检测"),
+    ("TRADITIONAL_ALGORITHM", "传统算法系", "IMG_FILTER", "图像滤波"),
+    ("TRADITIONAL_ALGORITHM", "传统算法系", "EDGE_DETECT", "边缘检测"),
+    ("DEEP_LEARNING", "深度学习系", "MODEL_TRAIN", "模型训练"),
+    ("DEEP_LEARNING", "深度学习系", "MODEL_TUNE", "模型调优"),
+    ("SYSTEM_DEPLOYMENT", "系统部署系", "PRODUCTION_DEBUG", "产线联调"),
+]
 
 # --------------------------------------------------------------- 七个模块的引导子标题
 
@@ -504,6 +530,70 @@ def render_answer(sections: list[tuple[str, str]]) -> str:
     return "\n\n".join(f"### {title}\n{body}" for title, body in sections)
 
 
+async def _page_of(client: httpx.AsyncClient, path: str, **params: object) -> list[dict]:
+    """取分页接口的一页数据（造数脚本用大 page_size，不关心翻页）。"""
+    page = await call(client, "get", path, params={"page_size": 200, **params})
+    return list(page["items"])  # type: ignore[index]
+
+
+async def _ensure_class(client: httpx.AsyncClient, *, class_name: str) -> dict:
+    """按名字找班级，没有就建一个（幂等）。"""
+    for item in await _page_of(client, "/api/classes", keyword=class_name):
+        if item["class_name"] == class_name:
+            return item
+    return await call(
+        client,
+        "post",
+        "/api/classes",
+        json={"class_name": class_name, "remark": "案例数据脚本创建"},
+    )
+
+
+async def _ensure_job(client: httpx.AsyncClient, *, job_name: str) -> dict:
+    """按名字找岗位，没有就建一个（幂等）。"""
+    for item in await _page_of(client, "/api/jobs", keyword=job_name):
+        if item["job_name"] == job_name:
+            return item
+    return await call(
+        client,
+        "post",
+        "/api/jobs",
+        json={
+            "job_name": job_name,
+            "direction_tag": "机器视觉",
+            "scene": "工业视觉检测项目交付",
+            "description": "面向来料视觉检测项目的交付岗位，覆盖光学选型、算法与产线联调",
+        },
+    )
+
+
+async def _ensure_skill_nodes(client: httpx.AsyncClient) -> list[dict]:
+    """按 code 找技能节点；技能树或节点缺失就补建，返回节点列表。"""
+    trees = {item["tree_code"]: item for item in await _page_of(client, "/api/skill-trees")}
+    nodes: list[dict] = []
+    for tree_code, tree_name, node_code, node_name in PROJECT_SKILL_NODES:
+        tree = trees.get(tree_code)
+        if tree is None:
+            tree = await call(
+                client,
+                "post",
+                "/api/skill-trees",
+                json={"tree_code": tree_code, "tree_name": tree_name},
+            )
+            trees[tree_code] = tree
+        siblings = await call(client, "get", f"/api/skill-trees/{tree['id']}/nodes")
+        node = next((item for item in siblings if item["node_code"] == node_code), None)
+        if node is None:
+            node = await call(
+                client,
+                "post",
+                f"/api/skill-trees/{tree['id']}/nodes",
+                json={"node_code": node_code, "node_name": node_name},
+            )
+        nodes.append(node)
+    return nodes
+
+
 async def run(*, user_no: str, project_name: str, run_review: bool) -> None:
     async with SessionLocal() as session:
 
@@ -565,7 +655,20 @@ async def _seed(client: httpx.AsyncClient, *, user_no: str, project_name: str, r
         )
     await call(client, "patch", f"/api/projects/{project_id}", json={"status": "PUBLISHED"})
     detail = await call(client, "get", f"/api/projects/{project_id}")
-    print(f"[2/8] 七个模块已配置并发布，权重合计 {detail['weight_total']}")
+    print(f"[2/9] 七个模块已配置并发布，权重合计 {detail['weight_total']}")
+
+    # 项目技能点：评审通过、项目完成时，技能进度就是按这里的关联重算的
+    skill_nodes = await _ensure_skill_nodes(client)
+    await call(
+        client,
+        "put",
+        f"/api/projects/{project_id}/skills",
+        json={"skill_node_ids": [node["id"] for node in skill_nodes]},
+    )
+    print(
+        f"[3/9] 项目已关联 {len(skill_nodes)} 个技能点："
+        + "、".join(node["node_name"] for node in skill_nodes)
+    )
 
     # 项目附件：报告模板（给学生照格式写）+ 评分标准（AI 评审的依据）
     await call(
@@ -583,13 +686,13 @@ async def _seed(client: httpx.AsyncClient, *, user_no: str, project_name: str, r
         data={"file_kind": "SCORING_CRITERIA", "title": "工业视觉检测项目评分标准"},
     )
     doc_id = criteria["knowledge_doc_id"]
-    print(f"[3/8] 报告模板已上传；评分标准入库：doc #{doc_id}，切片 {criteria['chunk_count']} 条")
+    print(f"[4/9] 报告模板已上传；评分标准入库：doc #{doc_id}，切片 {criteria['chunk_count']} 条")
 
     if run_review:
         embedded = await call(client, "post", f"/api/knowledge/docs/{doc_id}/embed")
-        print(f"[4/8] 评分标准已向量化：{embedded['chunk_count']} 条 → {embedded['collection']}")
+        print(f"[5/9] 评分标准已向量化：{embedded['chunk_count']} 条 → {embedded['collection']}")
     else:
-        print("[4/8] 跳过向量化（--no-review）")
+        print("[5/9] 跳过向量化（--no-review）")
 
     student = await call(
         client,
@@ -597,8 +700,36 @@ async def _seed(client: httpx.AsyncClient, *, user_no: str, project_name: str, r
         "/api/users",
         json={"user_no": user_no, "real_name": "案例演示学生", "user_type": "STUDENT"},
     )
+
+    # 班级与岗位：审核列表的班级列、数据总览的岗位热度、学习过程统计、技能树都挂在
+    # 这两条关联上；不建的话学生在业务上是"游离"的，下游页面全是空的。
+    classroom = await _ensure_class(client, class_name=CLASS_NAME)
+    await call(
+        client,
+        "post",
+        f"/api/classes/{classroom['id']}/students",
+        json={"user_no": user_no, "real_name": "案例演示学生"},
+    )
+    job = await _ensure_job(client, job_name=JOB_NAME)
+    await call(
+        client,
+        "post",
+        f"/api/students/{student['id']}/jobs",
+        json={"job_id": job["id"], "is_primary": True},
+    )
+    job_skill_ids = {item["id"] for item in await call(client, "get", f"/api/jobs/{job['id']}/skills")}
+    added_skills = 0
+    for node in skill_nodes:
+        if node["id"] not in job_skill_ids:
+            await call(client, "post", f"/api/jobs/{job['id']}/skills/{node['id']}")
+            added_skills += 1
+
     attempt = await call(client, "post", f"/api/students/{student['id']}/projects/{project_id}/start")
-    print(f"[5/8] 学生 #{student['id']} 开始闯关，轮次 #{attempt['id']}，共 {len(attempt['stages'])} 关")
+    print(
+        f"[6/9] 学生 #{student['id']} 已入班「{classroom['class_name']}」、"
+        f"选岗「{job['job_name']}」（补 {added_skills} 个岗位技能）；"
+        f"开始闯关，轮次 #{attempt['id']}，共 {len(attempt['stages'])} 关"
+    )
 
     # 逐关卡按引导子标题填写作答
     for stage in attempt["stages"]:
@@ -613,7 +744,7 @@ async def _seed(client: httpx.AsyncClient, *, user_no: str, project_name: str, r
             json={"answer_text": render_answer(sections)},
         )
     print(
-        "[6/8] 七关作答已填写："
+        "[7/9] 七关作答已填写："
         + "、".join(f"{s['stage_name']}({len(ANSWERS.get(s['stage_key'], []))}项)" for s in attempt["stages"])
     )
 
@@ -631,16 +762,16 @@ async def _seed(client: httpx.AsyncClient, *, user_no: str, project_name: str, r
         "post",
         f"/api/attempts/{attempt['id']}/stages/{report_stage['id']}/files/{asset['id']}",
     )
-    print(f"[7/8] 实训报告已上传并挂到「{report_stage['stage_name']}」：{asset['original_name']}")
+    print(f"[8/9] 实训报告已上传并挂到「{report_stage['stage_name']}」：{asset['original_name']}")
 
     submission = await call(client, "post", f"/api/attempts/{attempt['id']}/submit")
     print(f"        整单提交：submission #{submission['id']}，状态 {submission['status']}")
 
     if not run_review:
-        print("[8/8] 跳过 AI 评审（--no-review）")
+        print("[9/9] 跳过 AI 评审（--no-review）")
         return
 
-    print("[8/8] AI 评审中（RAG 召回评分标准 → DeepSeek 打分）……")
+    print("[9/9] AI 评审中（RAG 召回评分标准 → DeepSeek 打分）……")
     started = time.perf_counter()
     result = await call(client, "post", f"/api/submissions/{submission['id']}/ai-review")
     elapsed = time.perf_counter() - started
@@ -666,6 +797,15 @@ async def _seed(client: httpx.AsyncClient, *, user_no: str, project_name: str, r
     final = await call(client, "get", f"/api/submissions/{submission['id']}")
     print(f"结算后提交状态：{final['status']}，总分 {final['total_score']}，结论 {final['final_conclusion']}")
     print(f"评审记录：/api/submissions/{submission['id']}/reviews")
+
+    # 技能进度是这条链路的"下游产物"：项目挂技能点 + 评审通过 → 结算时重算，
+    # 这里打出来一眼就能看出关联有没有真的生效（全是 0 就说明 project_skill 没挂上）
+    skills = await call(client, "get", f"/api/students/{student['id']}/skills")
+    advanced = [item for item in skills if float(item.get("progress") or 0) > 0]
+    print(
+        f"技能进度：{len(advanced)}/{len(skills)} 个技能点已推进 —— "
+        + "、".join(f"{item['node_name']} {float(item['progress']):.1f}%" for item in advanced)
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
