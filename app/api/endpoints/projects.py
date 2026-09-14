@@ -6,23 +6,32 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import DbSession, PageDep
 from app.core.exceptions import BusinessRuleError, ConflictError, NotFoundError
 from app.core.response import EnvelopeRoute
+from app.crud.attempt import FileAssetRepository
 from app.crud.job_skill import ProjectSkillRepository, SkillNodeRepository
 from app.crud.project import (
+    ProjectFileRepository,
     ProjectModuleRepository,
     StageTemplateRepository,
     TrainingProjectRepository,
 )
 from app.models.job_skill import SkillNode
-from app.models.project import ProjectModule, ProjectStageTemplate, TrainingProject
+from app.models.project import (
+    ProjectModule,
+    ProjectStageTemplate,
+    TrainingProject,
+)
 from app.schemas.base import ApiResponse, MessageOut, Page
 from app.schemas.job_skill import JobSkillSetIn, SkillNodeRead
 from app.schemas.project import (
+    ProjectFileAddIn,
+    ProjectFileRead,
+    ProjectFileUpdate,
     ProjectModuleAddIn,
     ProjectModuleDetail,
     ProjectModuleOrderIn,
@@ -36,6 +45,7 @@ from app.schemas.project import (
     TrainingProjectRead,
     TrainingProjectUpdate,
 )
+from app.services import storage
 from app.services.project import (
     build_module_details,
     ensure_publishable,
@@ -61,6 +71,14 @@ def training_project_repo(db: DbSession) -> TrainingProjectRepository:
     return TrainingProjectRepository(db)
 
 
+def project_file_repo(db: DbSession) -> ProjectFileRepository:
+    return ProjectFileRepository(db)
+
+
+def file_asset_repo(db: DbSession) -> FileAssetRepository:
+    return FileAssetRepository(db)
+
+
 def project_skill_repo(db: DbSession) -> ProjectSkillRepository:
     return ProjectSkillRepository(db)
 
@@ -74,6 +92,8 @@ ProjectModuleRepo = Annotated[ProjectModuleRepository, Depends(project_module_re
 TrainingProjectRepo = Annotated[TrainingProjectRepository, Depends(training_project_repo)]
 ProjectSkillRepo = Annotated[ProjectSkillRepository, Depends(project_skill_repo)]
 SkillNodeRepo = Annotated[SkillNodeRepository, Depends(skill_node_repo)]
+ProjectFileRepo = Annotated[ProjectFileRepository, Depends(project_file_repo)]
+FileAssetRepo = Annotated[FileAssetRepository, Depends(file_asset_repo)]
 
 
 # --------------------------------------------------------------------- 工具
@@ -106,14 +126,42 @@ async def _project_detail(
     project: TrainingProject,
     modules: ProjectModuleRepository,
     templates: StageTemplateRepository,
+    files: ProjectFileRepository,
+    assets: FileAssetRepository,
 ) -> dict:
-    """项目详情：带模块组成（关卡名/编码取模块库）与权重合计。"""
+    """项目详情：带模块组成（关卡名/编码取模块库）、权重合计与附件清单。"""
     items = await modules.list_of_project(project.id)
     return {
         **project.model_dump(),
         "modules": await build_module_details(items, templates),
         "weight_total": await weight_total(items),
+        "files": await _project_files(project.id, files, assets),
     }
+
+
+async def _project_files(
+    project_id: int,
+    files: ProjectFileRepository,
+    assets: FileAssetRepository,
+    *,
+    file_kind: str | None = None,
+) -> list[dict]:
+    """项目附件：把 file_asset 的文件名/大小/下载地址拼出来。"""
+    result: list[dict] = []
+    for link in await files.list_of_project(project_id, file_kind=file_kind):
+        asset = await assets.get(link.file_asset_id)
+        if asset is None:
+            continue
+        result.append(
+            {
+                **link.model_dump(),
+                "original_name": asset.original_name,
+                "content_type": asset.content_type,
+                "size_bytes": asset.size_bytes,
+                "download_url": f"/api/file-assets/{asset.id}/download",
+            }
+        )
+    return result
 
 
 # ------------------------------------------------------------------- 模块库
@@ -249,16 +297,18 @@ async def create_project(payload: TrainingProjectCreate, projects: TrainingProje
 @router.get(
     "/projects/{project_id}",
     response_model=ApiResponse[TrainingProjectDetail],
-    summary="项目详情（含关卡组成与权重合计）",
+    summary="项目详情（含关卡组成、权重合计与附件）",
 )
 async def get_project(
     project_id: int,
     projects: TrainingProjectRepo,
     modules: ProjectModuleRepo,
     templates: StageTemplateRepo,
+    files: ProjectFileRepo,
+    assets: FileAssetRepo,
 ) -> dict:
     project = await _project_or_404(projects, project_id)
-    return await _project_detail(project, modules, templates)
+    return await _project_detail(project, modules, templates, files, assets)
 
 
 @router.patch(
@@ -288,13 +338,173 @@ async def delete_project(
     project_id: int,
     projects: TrainingProjectRepo,
     modules: ProjectModuleRepo,
+    files: ProjectFileRepo,
 ) -> MessageOut:
     project = await _project_or_404(projects, project_id)
     if project.status == "PUBLISHED":
         raise BusinessRuleError("已发布的项目不能直接删除，请先下架")
     await modules.delete_of_project(project_id)
+    await files.delete_of_project(project_id)
     await projects.remove(project)
-    return MessageOut(message="项目已删除（软删）")
+    return MessageOut(message="项目已删除（软删，附件关联已清理，文件台账保留）")
+
+
+# --------------------------------------------------------------- 项目附件
+
+
+@router.get(
+    "/projects/{project_id}/files",
+    response_model=ApiResponse[list[ProjectFileRead]],
+    summary="项目附件列表（报告模板、数据文件等）",
+)
+async def list_project_files(
+    project_id: int,
+    projects: TrainingProjectRepo,
+    files: ProjectFileRepo,
+    assets: FileAssetRepo,
+    file_kind: Annotated[
+        str | None, Query(description="按用途过滤：REPORT_TEMPLATE / DATASET / GUIDE / OTHER")
+    ] = None,
+) -> list[dict]:
+    await _project_or_404(projects, project_id)
+    return await _project_files(project_id, files, assets, file_kind=file_kind)
+
+
+@router.post(
+    "/projects/{project_id}/files",
+    response_model=ApiResponse[ProjectFileRead],
+    status_code=status.HTTP_201_CREATED,
+    summary="把已上传的文件挂到项目上",
+)
+async def add_project_file(
+    project_id: int,
+    payload: ProjectFileAddIn,
+    projects: TrainingProjectRepo,
+    files: ProjectFileRepo,
+    assets: FileAssetRepo,
+) -> dict:
+    await _project_or_404(projects, project_id)
+    asset = await assets.get(payload.file_asset_id)
+    if asset is None:
+        raise NotFoundError(f"文件 {payload.file_asset_id} 不存在，请先上传")
+    if await files.by_asset(project_id, asset.id) is not None:
+        raise ConflictError(f"文件「{asset.original_name}」已经挂在这个项目上了")
+    data = {**payload.model_dump(), "project_id": project_id}
+    if not data.get("sort_no"):
+        data["sort_no"] = await files.next_sort_no(project_id)
+    link = await files.create(data)
+    return {
+        **link.model_dump(),
+        "original_name": asset.original_name,
+        "content_type": asset.content_type,
+        "size_bytes": asset.size_bytes,
+        "download_url": f"/api/file-assets/{asset.id}/download",
+    }
+
+
+@router.post(
+    "/projects/{project_id}/files/upload",
+    response_model=ApiResponse[ProjectFileRead],
+    status_code=status.HTTP_201_CREATED,
+    summary="一步到位：上传文件并挂到项目（报告模板 / 数据文件）",
+)
+async def upload_project_file(
+    project_id: int,
+    projects: TrainingProjectRepo,
+    files: ProjectFileRepo,
+    assets: FileAssetRepo,
+    file: Annotated[UploadFile, File(description="要上传的文件")],
+    file_kind: Annotated[
+        str, Form(description="REPORT_TEMPLATE 报告模板 / DATASET 数据文件 / GUIDE 说明 / OTHER")
+    ] = "OTHER",
+    title: Annotated[str | None, Form(description="展示名称，留空用文件名")] = None,
+    remark: Annotated[str | None, Form(description="备注")] = None,
+    uploaded_by: Annotated[int | None, Form(description="上传人 ID")] = None,
+) -> dict:
+    project = await _project_or_404(projects, project_id)
+    content = await file.read()
+    original_name = file.filename or "unnamed"
+    # 项目文件按项目分目录：projects/<项目ID>-<项目名>/<用途>/
+    stored = storage.save_bytes(
+        content,
+        filename=original_name,
+        biz_type=file_kind,
+        scope=storage.project_scope(project.id, project.project_name),
+    )
+    asset = await assets.create(
+        {
+            "uploader_id": uploaded_by,
+            "bucket": stored.bucket,
+            "object_key": stored.object_key,
+            "original_name": original_name,
+            "content_type": file.content_type,
+            "size_bytes": stored.size_bytes,
+            "sha256": stored.sha256,
+            "biz_type": file_kind,
+        }
+    )
+    link = await files.create(
+        {
+            "project_id": project_id,
+            "file_asset_id": asset.id,
+            "file_kind": file_kind,
+            "title": title,
+            "remark": remark,
+            "sort_no": await files.next_sort_no(project_id),
+            "uploaded_by": uploaded_by,
+        }
+    )
+    return {
+        **link.model_dump(),
+        "original_name": asset.original_name,
+        "content_type": asset.content_type,
+        "size_bytes": asset.size_bytes,
+        "download_url": f"/api/file-assets/{asset.id}/download",
+    }
+
+
+@router.patch(
+    "/projects/{project_id}/files/{project_file_id}",
+    response_model=ApiResponse[ProjectFileRead],
+    summary="调整项目附件（改名 / 换用途 / 排序 / 备注）",
+)
+async def update_project_file(
+    project_id: int,
+    project_file_id: int,
+    payload: ProjectFileUpdate,
+    projects: TrainingProjectRepo,
+    files: ProjectFileRepo,
+    assets: FileAssetRepo,
+) -> dict:
+    await _project_or_404(projects, project_id)
+    link = await files.get(project_file_id)
+    if link is None or link.project_id != project_id:
+        raise NotFoundError(f"项目 {project_id} 下的附件 {project_file_id} 不存在")
+    updated = await files.update(link, payload.model_dump(exclude_unset=True))
+    asset = await assets.get(updated.file_asset_id)
+    return {
+        **updated.model_dump(),
+        "original_name": asset.original_name if asset else "",
+        "content_type": asset.content_type if asset else None,
+        "size_bytes": asset.size_bytes if asset else 0,
+        "download_url": f"/api/file-assets/{updated.file_asset_id}/download",
+    }
+
+
+@router.delete(
+    "/projects/{project_id}/files/{project_file_id}",
+    response_model=ApiResponse[MessageOut],
+    summary="解除项目附件（文件台账与磁盘文件保留）",
+)
+async def remove_project_file(
+    project_id: int, project_file_id: int, projects: TrainingProjectRepo, files: ProjectFileRepo
+) -> MessageOut:
+    await _project_or_404(projects, project_id)
+    link = await files.get(project_file_id)
+    if link is None or link.project_id != project_id:
+        raise NotFoundError(f"项目 {project_id} 下的附件 {project_file_id} 不存在")
+    await files.remove(link)
+    return MessageOut(message="附件已从项目移除")
 
 
 # --------------------------------------------------------- 项目的关卡组成

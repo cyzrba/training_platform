@@ -41,7 +41,12 @@ from app.models.knowledge import (
 )
 from app.models.notification import Notification, OperationLog
 from app.models.organization import ClassGroup, ClassInfo, ClassStudent, ClassStudentGroup
-from app.models.project import ProjectModule, ProjectStageTemplate, TrainingProject
+from app.models.project import (
+    ProjectFile,
+    ProjectModule,
+    ProjectStageTemplate,
+    TrainingProject,
+)
 from app.models.review import ReviewAiJob, ReviewRecord
 
 __all__ = [
@@ -65,6 +70,7 @@ __all__ = [
     "Notification",
     "OperationLog",
     "ProjectModule",
+    "ProjectFile",
     "ProjectSkill",
     "ProjectStageTemplate",
     "ProjectSubmission",

@@ -24,6 +24,7 @@ from app.core.time import now
 from app.crud.account import RoleRepository, UserRepository, UserRoleRepository
 from app.crud.attempt import (
     AttemptStageRepository,
+    FileAssetRepository,
     StudentProjectRepository,
 )
 from app.crud.job_skill import (
@@ -41,6 +42,7 @@ from app.crud.organization import (
     ClassStudentRepository,
 )
 from app.crud.project import (
+    ProjectFileRepository,
     ProjectModuleRepository,
     StageTemplateRepository,
     TrainingProjectRepository,
@@ -49,6 +51,7 @@ from app.crud.review import ReviewAiJobRepository, ReviewRecordRepository
 from app.db.seed import SKILL_TREES, STAGE_TEMPLATES
 from app.models.account import SysUser
 from app.models.job_skill import StudentSkill
+from app.services import storage
 from app.services.attempt import (
     finalize_review,
     judge_conclusion,
@@ -511,6 +514,93 @@ STUDENT_PROJECT_PLAN: tuple[tuple[str, str, tuple[int, int], str], ...] = (
 #: 演示用的异议留言
 DEMO_OBJECTION = "我的光源对比实验写在方案设计第 3 小节，AI 评审里没有体现，申请教师人工复核。"
 
+# --------------------------------------------------------------- 项目附件
+#: 项目 -> 附件（报告模板 / 数据文件），内容是演示用的小文本
+PROJECT_FILES: dict[str, tuple[dict[str, str], ...]] = {
+    "工业缺陷检测实训": (
+        {
+            "file_kind": "REPORT_TEMPLATE",
+            "name": "实训报告模板.md",
+            "title": "实训报告模板",
+            "remark": "按章节填写，最后一节写改进方向",
+            "content": (
+                "# 工业缺陷检测实训报告\n\n"
+                "## 一、需求分析\n（检测对象、缺陷类型、精度要求）\n\n"
+                "## 二、方案设计\n（相机、光源、镜头选型与打光对比）\n\n"
+                "## 三、数据处理\n（数据集构建与标注规范）\n\n"
+                "## 四、模型训练与优化\n（模型选型、训练配置、指标对比）\n\n"
+                "## 五、测试与结论\n（测试集指标、典型错误案例、改进方向）\n"
+            ),
+        },
+        {
+            "file_kind": "DATASET",
+            "name": "缺陷样本清单.csv",
+            "title": "缺陷样本数据",
+            "remark": "示例数据，仅用于演示上传与下载",
+            "content": (
+                "sample_id,defect_type,size_mm,label\n"
+                "S0001,划痕,0.8,scratch\n"
+                "S0002,凹坑,1.2,dent\n"
+                "S0003,脏污,0.5,stain\n"
+                "S0004,划痕,0.3,scratch\n"
+            ),
+        },
+    ),
+    "表面缺陷分类进阶": (
+        {
+            "file_kind": "REPORT_TEMPLATE",
+            "name": "进阶实验报告模板.md",
+            "title": "进阶报告模板",
+            "remark": "需要附混淆矩阵与各类别指标",
+            "content": (
+                "# 表面缺陷分类进阶报告\n\n"
+                "## 一、数据集说明（类别、样本量、分布）\n\n"
+                "## 二、模型选型对比（ResNet / EfficientNet / ViT）\n\n"
+                "## 三、训练配置与监控\n\n"
+                "## 四、优化与指标（准确率、召回率、混淆矩阵）\n"
+            ),
+        },
+        {
+            "file_kind": "GUIDE",
+            "name": "标注规范说明.md",
+            "title": "标注规范说明",
+            "remark": "标注前必读",
+            "content": (
+                "# 标注规范\n\n"
+                "1. 每张图只标一个主缺陷类别；\n"
+                "2. 边界超出图像的缺陷不参与训练；\n"
+                "3. 类别存疑的交由教师确认后再入库。\n"
+            ),
+        },
+    ),
+    "成像系统搭建实训": (
+        {
+            "file_kind": "REPORT_TEMPLATE",
+            "name": "成像实验报告模板.md",
+            "title": "成像实验报告模板",
+            "remark": "需附成像效果对比图",
+            "content": (
+                "# 成像系统搭建实验报告\n\n"
+                "## 一、检测对象与视野要求\n\n"
+                "## 二、光源方案与打光对比\n\n"
+                "## 三、镜头与相机选型依据\n\n"
+                "## 四、调试过程与结论\n"
+            ),
+        },
+        {
+            "file_kind": "DATASET",
+            "name": "相机参数对比.csv",
+            "title": "相机选型参数表",
+            "remark": "选型对比用",
+            "content": (
+                "model,resolution,fps,interface,price_cny\n"
+                "MV-CA050,2448x2048,60,GigE,4200\n"
+                "MV-CA020,1624x1234,90,USB3,2800\n"
+            ),
+        },
+    ),
+}
+
 #: 已通过项目的评审分数（演示用，按学生序号轮换）
 DEMO_SCORES: tuple[str, ...] = ("92", "88", "85", "90")
 
@@ -589,6 +679,7 @@ async def run_demo_seed(session: AsyncSession | None = None) -> dict[str, int]:
         "submissions": 0,
         "reviews": 0,
         "student_skills": 0,
+        "project_files": 0,
     }
 
     try:
@@ -608,6 +699,8 @@ async def run_demo_seed(session: AsyncSession | None = None) -> dict[str, int]:
         training_projects = TrainingProjectRepository(session)
         project_modules = ProjectModuleRepository(session)
         project_skills = ProjectSkillRepository(session)
+        project_files = ProjectFileRepository(session)
+        file_assets = FileAssetRepository(session)
         student_records = StudentProjectRepository(session)
         attempt_stages = AttemptStageRepository(session)
         reviews_repo = ReviewRecordRepository(session)
@@ -849,6 +942,42 @@ async def run_demo_seed(session: AsyncSession | None = None) -> dict[str, int]:
                     continue
                 await project_skills.add_skill(project.id, node_id)
                 stats["project_skills"] += 1
+
+            # 项目附件：报告模板、数据文件（文件落本地存储，元数据进 file_asset）
+            existing_files = {
+                (link.file_kind, link.title) for link in await project_files.list_of_project(project.id)
+            }
+            for attachment in PROJECT_FILES.get(item["project_name"], ()):
+                if (attachment["file_kind"], attachment["title"]) in existing_files:
+                    continue
+                stored = storage.save_bytes(
+                    attachment["content"].encode("utf-8"),
+                    filename=attachment["name"],
+                    biz_type=attachment["file_kind"],
+                    scope=storage.project_scope(project.id, project.project_name),
+                )
+                asset = await file_assets.create(
+                    {
+                        "bucket": stored.bucket,
+                        "object_key": stored.object_key,
+                        "original_name": attachment["name"],
+                        "content_type": "text/plain; charset=utf-8",
+                        "size_bytes": stored.size_bytes,
+                        "sha256": stored.sha256,
+                        "biz_type": attachment["file_kind"],
+                    }
+                )
+                await project_files.create(
+                    {
+                        "project_id": project.id,
+                        "file_asset_id": asset.id,
+                        "file_kind": attachment["file_kind"],
+                        "title": attachment["title"],
+                        "remark": attachment["remark"],
+                        "sort_no": await project_files.next_sort_no(project.id),
+                    }
+                )
+                stats["project_files"] += 1
 
         # 学生闯关：走真实服务函数（开始闯关 → 填写 → 提交 → 评审定稿），保证与业务规则一致
         for class_name, project_name, (start, end), target in STUDENT_PROJECT_PLAN:

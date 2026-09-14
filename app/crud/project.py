@@ -7,7 +7,7 @@ from sqlmodel import delete, func, or_, select
 
 from app.core.time import now
 from app.crud.base import BaseRepository
-from app.models.project import ProjectModule, ProjectStageTemplate, TrainingProject
+from app.models.project import ProjectFile, ProjectModule, ProjectStageTemplate, TrainingProject
 from app.schemas.base import Page, PageParams
 
 
@@ -162,7 +162,33 @@ class ProjectModuleRepository(BaseRepository[ProjectModule]):
         await self.session.flush()
 
 
+class ProjectFileRepository(BaseRepository[ProjectFile]):
+    """项目附件仓储：报告模板、数据文件等与项目的关联。"""
+
+    model = ProjectFile
+
+    async def list_of_project(self, project_id: int, *, file_kind: str | None = None) -> list[ProjectFile]:
+        stmt = select(ProjectFile).where(ProjectFile.project_id == project_id)
+        if file_kind:
+            stmt = stmt.where(ProjectFile.file_kind == file_kind)
+        stmt = stmt.order_by(ProjectFile.sort_no, ProjectFile.id)
+        return list((await self.session.exec(stmt)).all())
+
+    async def by_asset(self, project_id: int, file_asset_id: int) -> ProjectFile | None:
+        return await self.get_by(project_id=project_id, file_asset_id=file_asset_id)
+
+    async def next_sort_no(self, project_id: int) -> int:
+        stmt = select(func.max(ProjectFile.sort_no)).where(ProjectFile.project_id == project_id)
+        return int((await self.session.exec(stmt)).one() or 0) + 1
+
+    async def delete_of_project(self, project_id: int) -> None:
+        """删项目时清掉附件关联（文件台账与磁盘文件保留）。"""
+        await self.session.exec(delete(ProjectFile).where(ProjectFile.project_id == project_id))
+        await self.session.flush()
+
+
 __all__ = [
+    "ProjectFileRepository",
     "ProjectModuleRepository",
     "StageTemplateRepository",
     "TrainingProjectRepository",

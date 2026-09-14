@@ -3,8 +3,9 @@
 from app.models import Base
 
 
-def test_table_count_is_38() -> None:
-    assert len(Base.metadata.tables) == 38
+def test_table_count_is_39() -> None:
+    """38 张业务表 + P3 新增的 project_file（项目附件）。"""
+    assert len(Base.metadata.tables) == 39
 
 
 def test_domain_table_names() -> None:
@@ -35,6 +36,7 @@ def test_domain_table_names() -> None:
         "training_project",
         "project_stage_template",
         "project_module",
+        "project_file",
         # E 闯关与评审
         "file_asset",
         "student_project",
@@ -61,10 +63,10 @@ def test_domain_table_names() -> None:
 
 def test_index_and_foreign_key_count() -> None:
     indexes = {index.name for table in Base.metadata.tables.values() for index in table.indexes}
-    assert len(indexes) == 33
+    assert len(indexes) == 34
 
     foreign_keys = sum(len(table.foreign_keys) for table in Base.metadata.tables.values())
-    assert foreign_keys == 57
+    assert foreign_keys == 60
 
 
 def test_soft_delete_tables() -> None:

@@ -156,6 +156,15 @@ class FileStatus(StrEnum):
     INVALID = "INVALID"  # 已失效
 
 
+class ProjectFileKind(StrEnum):
+    """项目附件的用途。"""
+
+    REPORT_TEMPLATE = "REPORT_TEMPLATE"  # 报告模板
+    DATASET = "DATASET"  # 数据文件
+    GUIDE = "GUIDE"  # 说明文档 / 指导书
+    OTHER = "OTHER"  # 其它
+
+
 class KnowledgeBizType(StrEnum):
     """知识文档关联的对象类型。"""
 
@@ -364,6 +373,17 @@ ENUM_DICTS: tuple[EnumDict, ...] = (
         "文件状态",
         FileStatus,
         {"ACTIVE": "可用", "INVALID": "已失效"},
+    ),
+    _enum_dict(
+        "project_file_kind",
+        "项目附件用途",
+        ProjectFileKind,
+        {
+            "REPORT_TEMPLATE": "报告模板",
+            "DATASET": "数据文件",
+            "GUIDE": "说明文档",
+            "OTHER": "其它",
+        },
     ),
     _enum_dict(
         "knowledge_biz_type",

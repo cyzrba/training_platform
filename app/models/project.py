@@ -111,7 +111,34 @@ class ProjectModule(Base, TimestampMixin, ProjectModuleBase, table=True):
     id: int | None = Field(default=None, primary_key=True)
 
 
+class ProjectFileBase(SQLModel):
+    project_id: int = Field(foreign_key="training_project.id", description="项目 ID")
+    file_asset_id: int = Field(foreign_key="file_asset.id", description="文件 ID（file_asset.id）")
+    file_kind: str = Field(
+        max_length=30,
+        description="用途：REPORT_TEMPLATE 报告模板 / DATASET 数据文件 / GUIDE 说明文档 / OTHER 其它",
+    )
+    title: str | None = Field(default=None, max_length=150, description="展示名称，留空用文件名")
+    remark: str | None = Field(default=None, max_length=255, description="备注")
+    sort_no: int = Field(default=0, description="展示排序，值越小越靠前")
+    uploaded_by: int | None = Field(default=None, foreign_key="sys_user.id", description="上传人 ID")
+
+
+class ProjectFile(Base, TimestampMixin, ProjectFileBase, table=True):
+    """项目附件：报告模板、数据文件、说明文档等（文件本体在存储里，这里只存关联）。"""
+
+    __tablename__ = "project_file"
+    __table_args__ = (
+        UniqueConstraint("project_id", "file_asset_id", name="uk_project_file"),
+        Index("idx_project_file_project", "project_id", "file_kind"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+
+
 __all__ = [
+    "ProjectFile",
+    "ProjectFileBase",
     "ProjectModule",
     "ProjectModuleBase",
     "ProjectStageTemplate",

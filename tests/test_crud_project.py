@@ -311,6 +311,117 @@ async def test_project_skills(client: httpx.AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_project_file_upload_and_attach(
+    client: httpx.AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """项目附件：上传文件 → 挂到项目 → 列表/下载/改名/解除，文件落磁盘。"""
+    from app.core.config import settings
+
+    # 上传目录指到临时目录，避免往仓库的 data/uploads 里塞测试文件
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
+    monkeypatch.setattr(settings, "max_upload_mb", 1)
+
+    project = (
+        await client.post("/api/projects", json={"project_name": "附件实训", "project_level": "BASIC"})
+    ).json()
+
+    # 一步到位：上传 + 挂到项目
+    template_bytes = "报告模板：1. 需求分析 2. 方案设计".encode()
+    uploaded = (
+        await client.post(
+            f"/api/projects/{project['id']}/files/upload",
+            files={"file": ("实训报告模板.md", template_bytes, "text/markdown")},
+            data={"file_kind": "REPORT_TEMPLATE", "title": "实训报告模板", "remark": "每个项目必交"},
+        )
+    ).json()
+    assert uploaded["file_kind"] == "REPORT_TEMPLATE"
+    assert uploaded["title"] == "实训报告模板"
+    assert uploaded["original_name"] == "实训报告模板.md"
+    assert uploaded["size_bytes"] == len(template_bytes)
+    assert uploaded["download_url"] == f"/api/file-assets/{uploaded['file_asset_id']}/download"
+    assert uploaded["sort_no"] == 1
+
+    # 文件落到项目目录：<upload_dir>/local/projects/<项目ID>-<项目名>/<用途>/<uuid>_<文件名>
+    asset = await _asset_of(client, uploaded["file_asset_id"])
+    path = settings.resolved_upload_dir / asset["bucket"] / asset["object_key"]
+    assert path.is_file() and path.read_bytes() == template_bytes
+    assert asset["bucket"] == "local"
+    assert asset["object_key"].startswith(f"projects/{project['id']}-附件实训/report_template/")
+    assert asset["object_key"].endswith("_实训报告模板.md")
+    assert asset["sha256"] and len(asset["sha256"]) == 64
+
+    # 数据文件走普通上传接口 + 挂载接口
+    csv_bytes = b"user_no,score\n2026001,88\n"
+    asset2 = (
+        await client.post(
+            "/api/file-assets/upload",
+            files={"file": ("样本数据.csv", csv_bytes, "text/csv")},
+            data={"biz_type": "DATASET"},
+        )
+    ).json()
+    assert asset2["object_key"].startswith("misc/dataset/")  # 没绑项目的走 misc/
+    attached = (
+        await client.post(
+            f"/api/projects/{project['id']}/files",
+            json={"file_asset_id": asset2["id"], "file_kind": "DATASET", "title": "训练样本数据"},
+        )
+    ).json()
+    assert attached["file_kind"] == "DATASET" and attached["sort_no"] == 2
+
+    # 同一个文件不能重复挂
+    duplicate = await client.post(
+        f"/api/projects/{project['id']}/files", json={"file_asset_id": asset2["id"]}
+    )
+    assert duplicate.json()["code"] == 422
+
+    # 项目详情里能直接看到附件
+    detail = (await client.get(f"/api/projects/{project['id']}")).json()
+    assert [item["file_kind"] for item in detail["files"]] == ["REPORT_TEMPLATE", "DATASET"]
+    listed = (await client.get(f"/api/projects/{project['id']}/files")).json()
+    assert len(listed) == 2
+    only_dataset = (
+        await client.get(f"/api/projects/{project['id']}/files", params={"file_kind": "DATASET"})
+    ).json()
+    assert [item["title"] for item in only_dataset] == ["训练样本数据"]
+
+    # 下载：拿到原始内容
+    download = await client.raw.get(uploaded["download_url"])
+    assert download.status_code == 200
+    assert download.content == template_bytes
+    assert "attachment" in download.headers["content-disposition"]
+
+    # 改名 / 换用途
+    patched = (
+        await client.patch(
+            f"/api/projects/{project['id']}/files/{uploaded['id']}",
+            json={"title": "报告模板 v2", "file_kind": "GUIDE", "remark": "换了用途"},
+        )
+    ).json()
+    assert patched["title"] == "报告模板 v2" and patched["file_kind"] == "GUIDE"
+
+    # 解除关联：文件台账与磁盘文件都还在
+    assert (await client.delete(f"/api/projects/{project['id']}/files/{uploaded['id']}")).status_code == 200
+    assert len((await client.get(f"/api/projects/{project['id']}/files")).json()) == 1
+    assert path.is_file()
+    assert (await client.get(f"/api/projects/{project['id']}/files/9999")).json()["code"] == 422
+
+    # 超过大小上限会被挡下
+    too_big = await client.post(
+        "/api/file-assets/upload",
+        files={"file": ("big.bin", b"x" * (2 * 1024 * 1024), "application/octet-stream")},
+        data={"biz_type": "DATASET"},
+    )
+    assert too_big.json()["code"] == 422
+    assert "上限" in too_big.json()["msg"]
+
+
+async def _asset_of(client: httpx.AsyncClient, asset_id: int) -> dict:
+    """从接口拿到文件台账（列表里筛出目标 ID）。"""
+    listed = (await client.get("/api/file-assets", params={"page_size": 50})).json()
+    return next(item for item in listed["items"] if item["id"] == asset_id)
+
+
+@pytest.mark.asyncio
 async def test_stage_template_has_no_default_items(client: httpx.AsyncClient) -> None:
     """模板只定义通用信息，不预设填写子标题（不同岗位方向的子标题差别太大）。"""
     created = (

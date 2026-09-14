@@ -9,10 +9,23 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.pool import StaticPool
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.core.config import settings
 from app.core.db import create_engine
 from app.core.db import get_db as real_get_db
 from app.main import app
 from app.models import Base
+from app.services import storage
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def local_storage(tmp_path, monkeypatch) -> AsyncGenerator[None, None]:
+    """测试统一用本地存储后端 + 临时目录，避免依赖 MinIO，也不往仓库里写文件。"""
+    monkeypatch.setattr(settings, "storage_backend", "local")
+    monkeypatch.setattr(settings, "upload_dir", str(tmp_path / "uploads"))
+    monkeypatch.setattr(settings, "max_upload_mb", 5)
+    storage.reset_client_cache()
+    yield
+    storage.reset_client_cache()
 
 
 @pytest_asyncio.fixture

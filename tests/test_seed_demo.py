@@ -24,6 +24,7 @@ from app.db.seed_demo import (
     DEMO_OBJECTION,
     DEMO_SCORES,
     JOBS,
+    PROJECT_FILES,
     PROJECT_MODULE_ITEMS,
     PROJECT_SKILLS,
     PROJECTS,
@@ -73,6 +74,7 @@ async def test_demo_seed_counts_and_idempotency(db_session) -> None:
         if target in {"COMPLETED", "OBJECTED"}
     )
     assert first["student_skills"] > 0
+    assert first["project_files"] == sum(len(files) for files in PROJECT_FILES.values())
 
     second = await run_demo_seed(db_session)
     assert second == dict.fromkeys(second, 0), "重复执行不应再新增数据"
@@ -198,6 +200,40 @@ async def test_demo_seed_stage_items(db_session) -> None:
     assert [item["title"] for item in first_module.items_json] != [
         item["title"] for item in second_module.items_json
     ]
+
+
+@pytest.mark.asyncio
+async def test_demo_seed_project_files(db_session) -> None:
+    """项目附件演示数据：每个项目都有报告模板，文件台账与磁盘文件都在。"""
+    from pathlib import Path
+
+    from app.core.config import settings
+    from app.crud.project import ProjectFileRepository
+
+    await RoleRepository(db_session).create({"role_code": "TEACHER", "role_name": "教师"})
+    await run_demo_seed(db_session)
+
+    files = ProjectFileRepository(db_session)
+    projects = TrainingProjectRepository(db_session)
+    for project_name, expected in PROJECT_FILES.items():
+        project = await projects.by_name(project_name)
+        assert project is not None
+        links = await files.list_of_project(project.id)
+        assert [(link.file_kind, link.title) for link in links] == [
+            (item["file_kind"], item["title"]) for item in expected
+        ]
+        # 报告模板必须有；磁盘上能按 bucket/object_key 找到文件
+        assert any(link.file_kind == "REPORT_TEMPLATE" for link in links)
+
+    # 抽查一条：文件真实落盘且大小与台账一致
+    sample = await files.list_of_project((await projects.by_name("工业缺陷检测实训")).id)
+    from app.crud.attempt import FileAssetRepository
+
+    asset = await FileAssetRepository(db_session).get(sample[0].file_asset_id)
+    assert asset is not None
+    path = Path(settings.resolved_upload_dir) / asset.bucket / asset.object_key
+    assert path.is_file()
+    assert path.stat().st_size == asset.size_bytes
 
 
 @pytest.mark.asyncio

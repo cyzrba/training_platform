@@ -31,6 +31,22 @@ class Settings(BaseSettings):
     #: 新建账号（用户 / 导入的学生）的默认密码，仅写入哈希后落库
     default_password: str = "123456"
 
+    #: 上传文件落盘位置，留空则用 <项目根>/data/uploads
+    upload_dir: str = ""
+    #: 单文件大小上限（MB）
+    max_upload_mb: int = 50
+
+    #: 文件存储后端：local 本地磁盘 / s3 对象存储（MinIO、OSS、S3 都走 s3 协议）
+    storage_backend: str = "local"
+    #: S3 兼容服务的接入信息（MinIO 部署时填 MinIO 地址）
+    s3_endpoint: str = ""  # 如 http://127.0.0.1:9000
+    s3_access_key: str = ""
+    s3_secret_key: str = ""
+    s3_bucket: str = "training-platform"
+    s3_region: str = "us-east-1"
+    #: 访问对象存储是否走系统/环境代理（MinIO 一般在内网，默认 False）
+    s3_use_proxy: bool = False
+
     default_page_size: int = 20
     max_page_size: int = 200
 
@@ -50,6 +66,13 @@ class Settings(BaseSettings):
         # 首次取用即建好 data 目录，避免 SQLite "unable to open database file"
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         return f"sqlite+aiosqlite:///{(DATA_DIR / 'app.db').as_posix()}"
+
+    @property
+    def resolved_upload_dir(self) -> Path:
+        """上传文件根目录（本地存储时使用，首次取用即建好目录）。"""
+        target = Path(self.upload_dir).expanduser() if self.upload_dir else DATA_DIR / "uploads"
+        target.mkdir(parents=True, exist_ok=True)
+        return target
 
 
 @lru_cache

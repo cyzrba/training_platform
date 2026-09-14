@@ -7,6 +7,9 @@ data/*.db
 data/*.db-wal
 data/*.db-shm
 
+# 本地上传的文件（本地存储实现；生产环境走对象存储）
+data/uploads/
+
 # 本地配置
 .env
 

@@ -186,6 +186,10 @@ class SysUserRead(TimestampRead, SoftDeleteRead, SysUserBase): id: int  # 出参
 - **填写引导子标题**：`project_module.items_json` 存本关卡的子标题，**由教师在项目里手填**
   （模板只定义编码/名称/默认权重/默认要求，不预设子标题 —— 不同岗位方向的实训项目子标题差别
   很大）；不同项目各填各的、互不影响，子标题只做填写引导，不参与校验与评分
+- **项目附件（报告模板 / 数据文件）**：`/api/projects/{id}/files` 增删改查、
+  `/api/projects/{id}/files/upload` 一步上传并挂载；文件本体落本地存储，元数据进 `file_asset`
+  台账，`project_file` 只存"项目挂了哪些文件、用途是什么"（REPORT_TEMPLATE / DATASET / GUIDE / OTHER）。
+  详见「文件存储」一节
 - 密码：`sys_user.password_hash` 只存 PBKDF2-SHA256 哈希，新建账号与导入学生的默认密码取
   `settings.default_password`（默认 123456）；接口出参不含任何密码字段
 - 教师端导学链路：建班级 → 下载模板 → 上传名单（先整批校验，学号重复即整批拒绝，**名单不含分组序号**）
@@ -218,6 +222,81 @@ class SysUserRead(TimestampRead, SoftDeleteRead, SysUserBase): id: int  # 出参
   `完成项目数 ÷ 关联项目总数 × 100` 重算；另提供 `POST /api/students/{id}/skills/recalculate` 手动重算。
   技能点**只看进度（0~100），不再分三态**；`activated_at` / `mastered_at` 语义为"首次产生进度"
   与"首次达到 100%"，进度回落时清空
+
+## 文件存储
+
+老师上传报告模板、数据文件、证书等，走的是**「存储 + 台账 + 关联」三段式**，文件本体不入库：
+
+```mermaid
+flowchart LR
+  A["上传（multipart）"] --> B["存储层 services/storage.py<br/>写磁盘并算 sha256"]
+  B --> C["file_asset 台账<br/>bucket + object_key + 原名 + 大小 + 摘要"]
+  C --> D["project_file 关联<br/>哪个项目用了它、用途是什么"]
+```
+
+- **目录布局（一个项目一个文件夹）**：
+
+  ```
+  <bucket>/
+  ├─ projects/
+  │  ├─ 1-工业缺陷检测实训/          # 项目 ID + 项目名
+  │  │  ├─ report_template/         # 报告模板
+  │  │  ├─ dataset/                 # 数据文件
+  │  │  ├─ guide/                   # 说明文档
+  │  │  └─ other/                   # 其它
+  │  └─ 2-表面缺陷分类进阶/
+  └─ misc/                          # 不绑项目的文件（证书、头像、学生作答附件…）
+     └─ <biz_type>/<年月>/
+  ```
+
+  文件名统一为 `<uuid>_<安全文件名>`（uuid 防重名，文件名与项目名里的空格等特殊字符会转成 `_`）；
+  项目文件夹带项目名，在 MinIO 控制台里一眼能认出是哪个实训。`upload_dir` 由 `.env` 的
+  `UPLOAD_DIR` 配置，默认 `<项目根>/data/uploads`（已在 .gitignore 内）
+- **台账**：`file_asset.bucket` 存桶名（本地固定 `local`）、`object_key` 存桶之后的相对路径，
+  两者拼起来就是磁盘真实位置；同一文件重复上传会生成不同 key（uuid 前缀）不去重，`sha256` 供业务查重
+- **上传接口**：`POST /api/file-assets/upload`（通用上传并登记）、
+  `POST /api/projects/{id}/files/upload`（上传并直接挂到项目，带 `file_kind`，落
+  `projects/<项目ID>-<项目名>/<用途>/`）
+- **下载**：`GET /api/file-assets/{id}/download`（返回文件流，不包统一响应体）
+- **限制**：单文件默认 50MB（`.env` 的 `MAX_UPLOAD_MB` 可调），空文件与超限直接 422
+- **切换对象存储**：把 `app/services/storage.py` 的 save / read / delete 换成 MinIO、OSS、S3 的
+  SDK 即可，`bucket + object_key` 语义已经对齐，表结构不用动
+- **删除语义**：从项目移除附件只删关联，文件台账与磁盘文件保留；删项目会清掉附件关联但保留文件
+
+### 切换到 MinIO（S3 协议）
+
+默认 `STORAGE_BACKEND=local`（本地磁盘，开箱即用）。要用对象存储（MinIO / 阿里云 OSS / AWS S3
+都走 s3 协议）按下面三步：
+
+```bash
+# 1. 起一个 MinIO（Docker 卷持久化，9000 是 S3 API，9001 是控制台）
+docker run -d --name training-minio --restart unless-stopped \
+  -p 9000:9000 -p 9001:9001 \
+  -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin123 \
+  -v training-minio-data:/data \
+  quay.io/minio/minio:latest server /data --console-address ":9001"
+
+# 2. 改 .env（桶不用手动建，上传时会自动创建）
+STORAGE_BACKEND=s3
+S3_ENDPOINT=http://127.0.0.1:9000
+S3_ACCESS_KEY=minioadmin
+S3_SECRET_KEY=minioadmin123
+S3_BUCKET=training-platform
+S3_USE_PROXY=false        # 对象存储在内网时保持 false
+
+# 3. 把本地已有文件搬进对象存储（幂等，本地文件保留）
+uv run python scripts/migrate_files_to_s3.py --dry-run   # 先看计划
+uv run python scripts/migrate_files_to_s3.py             # 真正迁移
+```
+
+- 迁移只改 `file_asset.bucket`（local → 桶名），`object_key` 不变，历史下载链接照常可用；
+  确认没问题后再手工清理 `data/uploads`
+- 控制台：http://127.0.0.1:9001（账号 `minioadmin` / `minioadmin123`）
+- 回到本地存储：`STORAGE_BACKEND=local` 即可，两种后端的文件布局一致
+- 已有文件重新归位（把历史 `<biz_type>/<年月>/` 结构整理成项目目录）：
+  `uv run python scripts/reorganize_project_files.py [--dry-run]`
+- 常见坑：本机若开了全局代理，访问内网对象存储会被代理转发（表现为 502）。
+  `S3_USE_PROXY=false` 时客户端会忽略系统代理；公网 S3 需要代理就设为 `true`
 
 ## 待确认
 

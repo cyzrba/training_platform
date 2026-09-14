@@ -5,6 +5,7 @@ from decimal import Decimal
 from sqlmodel import Field, SQLModel
 
 from app.models.project import (
+    ProjectFileBase,
     ProjectModuleBase,
     ProjectStageTemplateBase,
     TrainingProjectBase,
@@ -119,10 +120,43 @@ class ProjectModuleOrderIn(SQLModel):
     module_ids: list[int] = Field(min_length=1, description="项目模块 ID，按目标顺序排列")
 
 
+class ProjectFileAddIn(SQLModel):
+    """把已上传的文件挂到项目上（报告模板 / 数据文件等）。"""
+
+    file_asset_id: int = Field(description="文件 ID（先调 /api/file-assets/upload 上传得到）")
+    file_kind: str = Field(
+        default="OTHER",
+        max_length=30,
+        description="REPORT_TEMPLATE 报告模板 / DATASET 数据文件 / GUIDE 说明文档 / OTHER 其它",
+    )
+    title: str | None = Field(default=None, max_length=150, description="展示名称，留空用文件名")
+    remark: str | None = Field(default=None, max_length=255, description="备注")
+    sort_no: int | None = Field(default=None, ge=0, description="展示排序，留空排到最后")
+    uploaded_by: int | None = Field(default=None, description="上传人 ID")
+
+
+class ProjectFileUpdate(SQLModel):
+    """调整项目附件（改名 / 换用途 / 排序 / 备注）。"""
+
+    file_kind: str | None = Field(default=None, max_length=30)
+    title: str | None = Field(default=None, max_length=150)
+    remark: str | None = Field(default=None, max_length=255)
+    sort_no: int | None = Field(default=None, ge=0)
+
+
+class ProjectFileRead(TimestampRead, ProjectFileBase):
+    id: int
+    original_name: str = Field(description="原始文件名（取文件台账）")
+    content_type: str | None = Field(default=None, description="MIME 类型")
+    size_bytes: int = Field(default=0, description="文件大小（字节）")
+    download_url: str = Field(description="下载地址")
+
+
 class TrainingProjectDetail(TrainingProjectRead):
     """项目详情：附带模块组成与权重合计。"""
 
     modules: list[ProjectModuleDetail] = Field(default_factory=list, description="已选关卡，按顺序")
+    files: list[ProjectFileRead] = Field(default_factory=list, description="项目附件（报告模板、数据文件等）")
     weight_total: Decimal = Field(default=Decimal(0), description="已选模块权重合计（发布时需等于 100）")
 
 
@@ -131,6 +165,9 @@ __all__ = [
     "ProjectModuleAddIn",
     "ProjectModuleDetail",
     "ProjectModuleOrderIn",
+    "ProjectFileAddIn",
+    "ProjectFileRead",
+    "ProjectFileUpdate",
     "ProjectModuleRead",
     "ProjectModuleUpdate",
     "ProjectStageTemplateCreate",
