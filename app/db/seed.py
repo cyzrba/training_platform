@@ -182,6 +182,57 @@ SYSTEM_CONFIGS: list[dict[str, Any]] = [
         "config_value": {"formula": "completed_projects / related_projects * 100"},
         "description": "技能进度计算规则",
     },
+    {
+        "config_key": "ai.embedding",
+        "config_value": {
+            "provider": "flagembedding",
+            "model": "BAAI/bge-m3",
+            "model_path": "",  # 留空则优先用 <项目根>/models/bge-m3
+            "device": "auto",
+            "batch_size": 32,
+            "max_length": 8192,
+            "normalize": True,
+            "dim": 1024,
+            "version": "bge-m3-v1",  # 换模型必须换版本，Milvus 集合物理名带版本
+        },
+        "description": "向量模型（BGE-M3）参数",
+    },
+    {
+        "config_key": "ai.reranker",
+        "config_value": {
+            "provider": "flagembedding",
+            "model": "BAAI/bge-reranker-v2-m3",
+            "model_path": "",
+            "device": "auto",
+            "batch_size": 16,
+            "max_length": 1024,
+        },
+        "description": "重排模型（bge-reranker-v2-m3）参数",
+    },
+    {
+        "config_key": "rag.vector_store",
+        "config_value": {
+            "provider": "milvus",
+            "uri": "http://127.0.0.1:19530",
+            "collection_alias": "knowledge_chunk",
+            "collection_version": "v1",
+            "metric": "COSINE",
+            "index": "HNSW",
+            "consistency": "Bounded",
+        },
+        "description": "Milvus 连接与集合参数（物理名带版本，对外用别名）",
+    },
+    {
+        "config_key": "rag.retrieval",
+        "config_value": {
+            "retrieve_top_k": 50,
+            "rerank_top_k": 30,
+            "context_top_n": 6,
+            "score_threshold": 0.3,
+            "rrf_k": 60,
+        },
+        "description": "检索与重排参数",
+    },
 ]
 
 

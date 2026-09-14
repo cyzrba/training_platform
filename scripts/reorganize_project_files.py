@@ -1,10 +1,10 @@
 """把已上传的项目文件重新归位到"一个项目一个文件夹"的目录结构。
 
-目标结构（本地与对象存储都适用）：
+目标结构：
     <bucket>/projects/<项目ID>-<项目名>/<用途>/<uuid>_<文件名>
 
 改动对象：已经被项目引用（project_file）的文件 —— 按项目名重建 object_key，
-把对象搬过去（S3 copy+delete / 本地重命名），并更新 file_asset.object_key。
+把对象搬过去（S3 copy + delete），并更新 file_asset.object_key。
 
 幂等：已经在目标目录下的文件会被跳过；--dry-run 只打印计划。
 """
@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sqlmodel import select  # noqa: E402
 
+from app.core.config import settings  # noqa: E402
 from app.core.db import SessionLocal  # noqa: E402
 from app.crud.attempt import FileAssetRepository  # noqa: E402
 from app.models.attempt import FileAsset  # noqa: E402
@@ -75,7 +76,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="只打印计划，不改数据")
     args = parser.parse_args()
 
-    print(f"存储后端：{storage.backend_name()}")
+    print(f"对象存储：{settings.s3_endpoint} / 桶 {settings.s3_bucket}")
     stats = asyncio.run(reorganize(dry_run=args.dry_run))
     print("完成：扫描 {scanned}，归位 {moved}，已在目标位置 {skipped}".format(**stats))
     if args.dry_run:

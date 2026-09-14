@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from app.models.project import ProjectModule, ProjectStageTemplate, TrainingProject
+from app.services import storage
 
 TEMPLATES = "/api/stage-templates"
 
@@ -312,13 +313,11 @@ async def test_project_skills(client: httpx.AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_project_file_upload_and_attach(
-    client: httpx.AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """项目附件：上传文件 → 挂到项目 → 列表/下载/改名/解除，文件落磁盘。"""
+    """项目附件：上传文件 → 挂到项目 → 列表/下载/改名/解除，文件进对象存储。"""
     from app.core.config import settings
 
-    # 上传目录指到临时目录，避免往仓库的 data/uploads 里塞测试文件
-    monkeypatch.setattr(settings, "upload_dir", str(tmp_path))
     monkeypatch.setattr(settings, "max_upload_mb", 1)
 
     project = (
@@ -341,11 +340,10 @@ async def test_project_file_upload_and_attach(
     assert uploaded["download_url"] == f"/api/file-assets/{uploaded['file_asset_id']}/download"
     assert uploaded["sort_no"] == 1
 
-    # 文件落到项目目录：<upload_dir>/local/projects/<项目ID>-<项目名>/<用途>/<uuid>_<文件名>
+    # 对象落在项目目录：projects/<项目ID>-<项目名>/<用途>/<uuid>_<文件名>
     asset = await _asset_of(client, uploaded["file_asset_id"])
-    path = settings.resolved_upload_dir / asset["bucket"] / asset["object_key"]
-    assert path.is_file() and path.read_bytes() == template_bytes
-    assert asset["bucket"] == "local"
+    assert asset["bucket"] == "training-platform-test"
+    assert storage.read_bytes(asset["bucket"], asset["object_key"]) == template_bytes
     assert asset["object_key"].startswith(f"projects/{project['id']}-附件实训/report_template/")
     assert asset["object_key"].endswith("_实训报告模板.md")
     assert asset["sha256"] and len(asset["sha256"]) == 64
@@ -399,10 +397,10 @@ async def test_project_file_upload_and_attach(
     ).json()
     assert patched["title"] == "报告模板 v2" and patched["file_kind"] == "GUIDE"
 
-    # 解除关联：文件台账与磁盘文件都还在
+    # 解除关联：文件台账与对象存储里的文件都还在
     assert (await client.delete(f"/api/projects/{project['id']}/files/{uploaded['id']}")).status_code == 200
     assert len((await client.get(f"/api/projects/{project['id']}/files")).json()) == 1
-    assert path.is_file()
+    assert storage.exists(asset["bucket"], asset["object_key"])
     assert (await client.get(f"/api/projects/{project['id']}/files/9999")).json()["code"] == 422
 
     # 超过大小上限会被挡下

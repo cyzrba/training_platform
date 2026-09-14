@@ -14,14 +14,18 @@ from app.core.exceptions import BusinessRuleError, ConflictError, NotFoundError
 from app.core.response import EnvelopeRoute
 from app.crud.attempt import FileAssetRepository
 from app.crud.job_skill import ProjectSkillRepository, SkillNodeRepository
+from app.crud.knowledge import KnowledgeDocRepository
 from app.crud.project import (
     ProjectFileRepository,
     ProjectModuleRepository,
     StageTemplateRepository,
     TrainingProjectRepository,
 )
+from app.models.attempt import FileAsset
+from app.models.enums import KnowledgeDocType, ProjectFileKind
 from app.models.job_skill import SkillNode
 from app.models.project import (
+    ProjectFile,
     ProjectModule,
     ProjectStageTemplate,
     TrainingProject,
@@ -45,7 +49,7 @@ from app.schemas.project import (
     TrainingProjectRead,
     TrainingProjectUpdate,
 )
-from app.services import storage
+from app.services import knowledge_ingest, storage
 from app.services.project import (
     build_module_details,
     ensure_publishable,
@@ -162,6 +166,52 @@ async def _project_files(
             }
         )
     return result
+
+
+def _checked_file_kind(value: str) -> ProjectFileKind:
+    """附件用途只认枚举里的值，避免落库出现拼错的新用途。"""
+    try:
+        return ProjectFileKind(value)
+    except ValueError as exc:
+        allowed = " / ".join(item.value for item in ProjectFileKind)
+        raise BusinessRuleError(f"未知的附件用途 {value}，可选：{allowed}") from exc
+
+
+def _knowledge_fields(result: knowledge_ingest.IngestResult) -> dict:
+    """把入库结果摊成上传响应里的几个字段（切片状态对老师可见）。"""
+    doc = result.doc
+    return {
+        "knowledge_doc_id": doc.id,
+        "knowledge_status": doc.status,
+        "chunk_count": doc.total_chunks,
+        "knowledge_error": doc.parse_error,
+    }
+
+
+async def _ingest_scoring_criteria(session: DbSession, *, asset: FileAsset, link: ProjectFile) -> dict:
+    """把已经在文件台账里的文件当评分标准入库（同一文件重复挂不会建两份）。"""
+    docs = KnowledgeDocRepository(session)
+    existing = await docs.by_file_asset(asset.id)
+    if existing is not None:
+        return _knowledge_fields(
+            knowledge_ingest.IngestResult(
+                doc=existing,
+                chunk_count=existing.total_chunks,
+                ok=not existing.parse_error,
+                error=existing.parse_error,
+            )
+        )
+    ingested = await knowledge_ingest.create_doc_from_bytes(
+        session,
+        content=storage.read_bytes(asset.bucket, asset.object_key),
+        filename=asset.original_name,
+        title=link.title or asset.original_name,
+        doc_type=KnowledgeDocType.EVAL_CRITERIA,
+        file_asset_id=asset.id,
+        uploaded_by=link.uploaded_by,
+        description=link.remark,
+    )
+    return _knowledge_fields(ingested)
 
 
 # ------------------------------------------------------------------- 模块库
@@ -363,7 +413,8 @@ async def list_project_files(
     files: ProjectFileRepo,
     assets: FileAssetRepo,
     file_kind: Annotated[
-        str | None, Query(description="按用途过滤：REPORT_TEMPLATE / DATASET / GUIDE / OTHER")
+        str | None,
+        Query(description="按用途过滤：REPORT_TEMPLATE / DATASET / GUIDE / SCORING_CRITERIA / OTHER"),
     ] = None,
 ) -> list[dict]:
     await _project_or_404(projects, project_id)
@@ -379,27 +430,33 @@ async def list_project_files(
 async def add_project_file(
     project_id: int,
     payload: ProjectFileAddIn,
+    session: DbSession,
     projects: TrainingProjectRepo,
     files: ProjectFileRepo,
     assets: FileAssetRepo,
 ) -> dict:
     await _project_or_404(projects, project_id)
+    file_kind = _checked_file_kind(payload.file_kind)
     asset = await assets.get(payload.file_asset_id)
     if asset is None:
         raise NotFoundError(f"文件 {payload.file_asset_id} 不存在，请先上传")
     if await files.by_asset(project_id, asset.id) is not None:
         raise ConflictError(f"文件「{asset.original_name}」已经挂在这个项目上了")
-    data = {**payload.model_dump(), "project_id": project_id}
+    data = {**payload.model_dump(), "project_id": project_id, "file_kind": file_kind.value}
     if not data.get("sort_no"):
         data["sort_no"] = await files.next_sort_no(project_id)
     link = await files.create(data)
-    return {
+    result = {
         **link.model_dump(),
         "original_name": asset.original_name,
         "content_type": asset.content_type,
         "size_bytes": asset.size_bytes,
         "download_url": f"/api/file-assets/{asset.id}/download",
     }
+    # 评分标准挂上来也要入库：允许"先上传到文件台账，再挂到项目"这条路径
+    if file_kind == ProjectFileKind.SCORING_CRITERIA:
+        result.update(await _ingest_scoring_criteria(session, asset=asset, link=link))
+    return result
 
 
 @router.post(
@@ -410,20 +467,38 @@ async def add_project_file(
 )
 async def upload_project_file(
     project_id: int,
+    session: DbSession,
     projects: TrainingProjectRepo,
     files: ProjectFileRepo,
     assets: FileAssetRepo,
     file: Annotated[UploadFile, File(description="要上传的文件")],
     file_kind: Annotated[
-        str, Form(description="REPORT_TEMPLATE 报告模板 / DATASET 数据文件 / GUIDE 说明 / OTHER")
+        str,
+        Form(
+            description=(
+                "REPORT_TEMPLATE 报告模板 / DATASET 数据文件 / GUIDE 说明 / "
+                "SCORING_CRITERIA 评分标准（上传即解析切片入库）/ OTHER"
+            )
+        ),
     ] = "OTHER",
     title: Annotated[str | None, Form(description="展示名称，留空用文件名")] = None,
+    filename: Annotated[
+        str | None,
+        Form(description="文件名覆盖（客户端文件名编码异常时用它传真实文件名）"),
+    ] = None,
     remark: Annotated[str | None, Form(description="备注")] = None,
     uploaded_by: Annotated[int | None, Form(description="上传人 ID")] = None,
 ) -> dict:
     project = await _project_or_404(projects, project_id)
+    kind = _checked_file_kind(file_kind)
     content = await file.read()
-    original_name = file.filename or "unnamed"
+    original_name = storage.clean_upload_name(filename or file.filename)
+    # 评分标准：先把解析与切片算出来（纯 CPU，不占数据库写锁），再落文件与台账
+    plan = (
+        knowledge_ingest.build_plan(content, original_name)
+        if kind == ProjectFileKind.SCORING_CRITERIA
+        else None
+    )
     # 项目文件按项目分目录：projects/<项目ID>-<项目名>/<用途>/
     stored = storage.save_bytes(
         content,
@@ -447,20 +522,32 @@ async def upload_project_file(
         {
             "project_id": project_id,
             "file_asset_id": asset.id,
-            "file_kind": file_kind,
+            "file_kind": kind.value,
             "title": title,
             "remark": remark,
             "sort_no": await files.next_sort_no(project_id),
             "uploaded_by": uploaded_by,
         }
     )
-    return {
+    result = {
         **link.model_dump(),
         "original_name": asset.original_name,
         "content_type": asset.content_type,
         "size_bytes": asset.size_bytes,
         "download_url": f"/api/file-assets/{asset.id}/download",
     }
+    if plan is not None:
+        ingested = await knowledge_ingest.persist_plan(
+            session,
+            plan,
+            title=title or original_name,
+            doc_type=KnowledgeDocType.EVAL_CRITERIA,
+            file_asset_id=asset.id,
+            uploaded_by=uploaded_by,
+            description=remark,
+        )
+        result.update(_knowledge_fields(ingested))
+    return result
 
 
 @router.patch(

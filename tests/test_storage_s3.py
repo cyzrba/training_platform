@@ -2,6 +2,9 @@
 
 默认跳过：只有本机能连上 MinIO（默认 127.0.0.1:9000）时才跑。
 本地起 MinIO 见 README「文件存储」，起完直接 `uv run pytest tests/test_storage_s3.py` 即可。
+
+存储配置由 conftest 的 ``object_storage`` 夹具统一给定，对象落在测试桶
+``training-platform-test``，与开发桶隔离。
 """
 
 import socket
@@ -9,7 +12,6 @@ import socket
 import httpx
 import pytest
 
-from app.core.config import settings
 from app.services import storage
 
 MINIO_HOST = "127.0.0.1"
@@ -29,24 +31,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@pytest.fixture
-def s3_storage(monkeypatch: pytest.MonkeyPatch) -> None:
-    """把存储后端切到 S3（指向本机 MinIO）。"""
-    monkeypatch.setattr(settings, "storage_backend", "s3")
-    monkeypatch.setattr(settings, "s3_endpoint", f"http://{MINIO_HOST}:{MINIO_PORT}")
-    monkeypatch.setattr(settings, "s3_access_key", "minioadmin")
-    monkeypatch.setattr(settings, "s3_secret_key", "minioadmin123")
-    monkeypatch.setattr(settings, "s3_bucket", "training-platform-test")
-    monkeypatch.setattr(settings, "s3_region", "us-east-1")
-    monkeypatch.setattr(settings, "s3_use_proxy", False)
-    storage.reset_client_cache()
-    yield
-    storage.reset_client_cache()
-
-
 @pytest.mark.asyncio
-async def test_upload_and_download_through_minio(client: httpx.AsyncClient, s3_storage, tmp_path) -> None:
-    """上传走 S3 协议进 MinIO，下载再从 MinIO 取回来，本地磁盘不落文件。"""
+async def test_upload_and_download_through_minio(client: httpx.AsyncClient) -> None:
+    """上传走 S3 协议进 MinIO，下载再从 MinIO 取回来。"""
     content = "缺陷检测实训报告模板：一、需求分析…".encode()
     uploaded = (
         await client.post(
@@ -55,7 +42,7 @@ async def test_upload_and_download_through_minio(client: httpx.AsyncClient, s3_s
             data={"biz_type": "REPORT_TEMPLATE"},
         )
     ).json()
-    assert uploaded["bucket"] == "training-platform-test"  # 不再是 local
+    assert uploaded["bucket"] == "training-platform-test"
     assert uploaded["size_bytes"] == len(content)
     assert uploaded["object_key"].startswith("misc/report_template/")  # 未绑项目走 misc/
 
@@ -63,9 +50,6 @@ async def test_upload_and_download_through_minio(client: httpx.AsyncClient, s3_s
     client_s3 = storage._s3_client()
     obj = client_s3.get_object(Bucket=uploaded["bucket"], Key=uploaded["object_key"])
     assert obj["Body"].read() == content
-
-    # 本地临时目录里不应该有文件（说明没落盘）
-    assert not list((tmp_path / "uploads").rglob("*")) if (tmp_path / "uploads").exists() else True
 
     # 通过接口下载回来
     download = await client.raw.get(f"/api/file-assets/{uploaded['id']}/download")

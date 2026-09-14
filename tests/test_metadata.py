@@ -63,7 +63,7 @@ def test_domain_table_names() -> None:
 
 def test_index_and_foreign_key_count() -> None:
     indexes = {index.name for table in Base.metadata.tables.values() for index in table.indexes}
-    assert len(indexes) == 34
+    assert len(indexes) == 35
 
     foreign_keys = sum(len(table.foreign_keys) for table in Base.metadata.tables.values())
     assert foreign_keys == 60

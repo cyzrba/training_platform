@@ -1,19 +1,16 @@
-"""文件存储：本地磁盘 / S3 协议对象存储（MinIO、OSS、AWS S3 都走 s3）双后端。
+"""文件存储：S3 协议对象存储（MinIO / 阿里云 OSS / AWS S3 都走这一套）。
 
-存储约定（两个后端一致）：
+存储约定：
 - **项目相关**（报告模板、数据文件等）：``projects/<项目ID>-<项目名>/<用途>/<uuid>_<安全文件名>``，
   例如 ``projects/1-工业缺陷检测实训/report_template/3f1c…_实训报告模板.md``
   —— 一个实训项目一个文件夹，里面按用途分 dataset / guide / report_template / other；
 - **其它文件**（证书、头像、学生作答附件等）：``misc/<biz_type>/<年月>/<uuid>_<安全文件名>``；
-- 本地后端落在 ``<upload_dir>/<bucket>/...``，S3 后端就是对象的 Key；
-- ``file_asset.bucket`` 存桶名、``object_key`` 存相对路径，两者拼起来定位文件；
+- 对象的 Key 就是上面这串相对路径；``file_asset.bucket`` 存桶名、``object_key`` 存 Key，
+  两者拼起来定位对象；
 - 同一份内容重复上传生成不同 object_key（uuid 前缀），不去重；``sha256`` 供业务查重。
 
-后端由 ``settings.storage_backend`` 选择：
-- ``local``：写本地磁盘（默认，开发与测试用，零外部依赖）；
-- ``s3``：走 S3 协议，需要配置 S3_ENDPOINT / S3_ACCESS_KEY / S3_SECRET_KEY / S3_BUCKET。
-
-本地存量文件迁到 MinIO：``uv run python scripts/migrate_files_to_s3.py``（见 README）。
+接入信息全部来自 ``.env``：``S3_ENDPOINT`` / ``S3_ACCESS_KEY`` / ``S3_SECRET_KEY`` / ``S3_BUCKET``。
+本地开发用 ``deploy/docker-compose.rag.yml`` 里的 MinIO（127.0.0.1:9000）。
 """
 
 import hashlib
@@ -28,24 +25,17 @@ from uuid import uuid4
 from app.core.config import settings
 from app.core.exceptions import BusinessRuleError, NotFoundError
 
-LOCAL_BUCKET = "local"
-S3_BACKEND = "s3"
 _SAFE_NAME_RE = re.compile(r"[^0-9A-Za-z._\u4e00-\u9fff-]+")
 
 
 @dataclass(frozen=True)
 class StoredFile:
-    """落盘/入桶结果：写进 file_asset 的几个字段。"""
+    """入桶结果：写进 file_asset 的几个字段。"""
 
     bucket: str
     object_key: str
     size_bytes: int
     sha256: str
-    backend: str
-
-
-def backend_name() -> str:
-    return S3_BACKEND if settings.storage_backend.lower() == S3_BACKEND else "local"
 
 
 def _safe_name(filename: str) -> str:
@@ -55,8 +45,30 @@ def _safe_name(filename: str) -> str:
     return cleaned[:120] or "unnamed"
 
 
-def _root() -> Path:
-    return settings.resolved_upload_dir
+def clean_upload_name(raw: str | None, *, fallback: str = "unnamed") -> str:
+    """规整上传文件名。
+
+    有些客户端（PowerShell 的 multipart、部分老 SDK）会把非 ASCII 文件名按 RFC 2047
+    编码，服务端拿到的是 ``=?utf-8?B?...?=`` 这种转义串，扩展名也就丢了。这里先解码回
+    可读文件名（真认不出来的由解析层按文件头嗅探兜底），再去掉路径部分防穿越。
+    """
+    name = (raw or "").strip()
+    if not name:
+        return fallback
+    if name.startswith("=?") and "?" in name[2:]:
+        try:
+            from email.header import decode_header
+
+            parts = decode_header(name)
+            decoded = "".join(
+                chunk.decode(encoding or "utf-8", errors="replace") if isinstance(chunk, bytes) else chunk
+                for chunk, encoding in parts
+            )
+            name = decoded.strip() or name
+        except Exception:  # 解不出来就用原样
+            pass
+    name = name.replace("\\", "/").rsplit("/", 1)[-1].strip()
+    return name or fallback
 
 
 # ------------------------------------------------------------------ S3 客户端
@@ -89,7 +101,7 @@ def _s3_client() -> Any:
 
 
 def reset_client_cache() -> None:
-    """改完配置（比如测试里切后端）后清掉客户端缓存。"""
+    """改完配置（比如测试里换桶）后清掉客户端缓存。"""
     _s3_client.cache_clear()
 
 
@@ -118,7 +130,7 @@ def project_scope(project_id: int, project_name: str) -> str:
 
 
 def save_bytes(content: bytes, *, filename: str, biz_type: str, scope: str | None = None) -> StoredFile:
-    """把内容写到当前后端，返回 bucket / object_key / 大小 / 摘要。
+    """把内容写进对象存储，返回 bucket / object_key / 大小 / 摘要。
 
     ``scope`` 传项目前缀（见 :func:`project_scope`）时按项目组织目录，否则落到 ``misc/``。
     """
@@ -134,66 +146,32 @@ def save_bytes(content: bytes, *, filename: str, biz_type: str, scope: str | Non
         else _build_object_key(filename, biz_type)
     )
     digest = hashlib.sha256(content).hexdigest()
-
-    if backend_name() == S3_BACKEND:
-        bucket = ensure_bucket()
-        _s3_client().put_object(Bucket=bucket, Key=object_key, Body=content)
-        return StoredFile(
-            bucket=bucket,
-            object_key=object_key,
-            size_bytes=len(content),
-            sha256=digest,
-            backend=S3_BACKEND,
-        )
-
-    target = _root() / LOCAL_BUCKET / object_key
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(content)
+    bucket = ensure_bucket()
+    _s3_client().put_object(Bucket=bucket, Key=object_key, Body=content)
     return StoredFile(
-        bucket=LOCAL_BUCKET,
+        bucket=bucket,
         object_key=object_key,
         size_bytes=len(content),
         sha256=digest,
-        backend="local",
     )
 
 
 # -------------------------------------------------------------------- 读取
 
 
-def path_of(bucket: str, object_key: str) -> Path:
-    """本地后端的磁盘路径；挡住 ``..`` 之类的越权访问。"""
-    root = (_root() / bucket).resolve()
-    target = (root / object_key).resolve()
-    if root not in target.parents and target != root:
-        raise NotFoundError("文件路径非法")
-    if not target.is_file():
-        raise NotFoundError(f"文件不存在：{bucket}/{object_key}")
-    return target
-
-
-def is_object_storage(bucket: str) -> bool:
-    """这条台账记录是不是在对象存储里（本地桶名固定 local）。"""
-    return bucket != LOCAL_BUCKET
-
-
 def read_bytes(bucket: str, object_key: str) -> bytes:
-    """读文件内容：对象存储走 S3，本地走磁盘。"""
-    if is_object_storage(bucket):
-        try:
-            result = _s3_client().get_object(Bucket=bucket, Key=object_key)
-        except Exception as exc:  # 对象不存在 / 权限不足
-            raise NotFoundError(f"对象不存在：{bucket}/{object_key}") from exc
-        return result["Body"].read()
-    return path_of(bucket, object_key).read_bytes()
+    """读对象内容；读不到（不存在 / 无权限）抛 ``NotFoundError``。"""
+    try:
+        result = _s3_client().get_object(Bucket=bucket, Key=object_key)
+    except Exception as exc:
+        raise NotFoundError(f"对象不存在：{bucket}/{object_key}") from exc
+    return result["Body"].read()
 
 
 def exists(bucket: str, object_key: str) -> bool:
     try:
-        if is_object_storage(bucket):
-            _s3_client().head_object(Bucket=bucket, Key=object_key)
-            return True
-        return path_of(bucket, object_key).is_file()
+        _s3_client().head_object(Bucket=bucket, Key=object_key)
+        return True
     except Exception:
         return False
 
@@ -202,55 +180,31 @@ def exists(bucket: str, object_key: str) -> bool:
 
 
 def delete(bucket: str, object_key: str) -> None:
-    """删除文件；文件不在（比如已被清理）时静默跳过。"""
-    if is_object_storage(bucket):
-        try:
-            _s3_client().delete_object(Bucket=bucket, Key=object_key)
-        except Exception:
-            return
-        return
+    """删除对象；对象不在（比如已被清理）时静默跳过。"""
     try:
-        path_of(bucket, object_key).unlink()
-    except NotFoundError:
+        _s3_client().delete_object(Bucket=bucket, Key=object_key)
+    except Exception:
         return
-
-
-def upload_local_file(local_path: Path, *, bucket: str, object_key: str) -> None:
-    """把本地磁盘上的文件搬到对象存储（迁移脚本用），Key 保持不变。"""
-    client = _s3_client()
-    with local_path.open("rb") as handle:
-        client.upload_fileobj(handle, bucket, object_key)
 
 
 def move_object(bucket: str, source_key: str, target_key: str) -> None:
-    """在同一个桶里移动对象（重新组织目录用）：对象存储用 copy+delete，本地用重命名。"""
+    """在同一个桶里移动对象（重新组织目录用）：对象存储用 copy + delete。"""
     if source_key == target_key:
         return
-    if is_object_storage(bucket):
-        client = _s3_client()
-        client.copy_object(Bucket=bucket, CopySource={"Bucket": bucket, "Key": source_key}, Key=target_key)
-        client.delete_object(Bucket=bucket, Key=source_key)
-        return
-    source = path_of(bucket, source_key)
-    target = _root() / bucket / target_key
-    target.parent.mkdir(parents=True, exist_ok=True)
-    source.rename(target)
+    client = _s3_client()
+    client.copy_object(Bucket=bucket, CopySource={"Bucket": bucket, "Key": source_key}, Key=target_key)
+    client.delete_object(Bucket=bucket, Key=source_key)
 
 
 __all__ = [
-    "LOCAL_BUCKET",
-    "S3_BACKEND",
     "StoredFile",
-    "backend_name",
+    "clean_upload_name",
     "delete",
     "ensure_bucket",
     "exists",
-    "is_object_storage",
     "move_object",
-    "path_of",
     "project_scope",
     "read_bytes",
     "reset_client_cache",
     "save_bytes",
-    "upload_local_file",
 ]

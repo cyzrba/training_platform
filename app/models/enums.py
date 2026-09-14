@@ -147,6 +147,11 @@ class FileBizType(StrEnum):
     CERT_PDF = "CERT_PDF"  # 证书 PDF
     IMPORT = "IMPORT"  # 导入名单
     REPORT = "REPORT"  # 实训报告
+    # 以下四个与 ProjectFileKind 对齐：项目附件上传时 file_asset.biz_type 直接取 file_kind
+    REPORT_TEMPLATE = "REPORT_TEMPLATE"  # 报告模板
+    DATASET = "DATASET"  # 数据文件
+    GUIDE = "GUIDE"  # 说明文档
+    SCORING_CRITERIA = "SCORING_CRITERIA"  # 评分标准
 
 
 class FileStatus(StrEnum):
@@ -162,15 +167,15 @@ class ProjectFileKind(StrEnum):
     REPORT_TEMPLATE = "REPORT_TEMPLATE"  # 报告模板
     DATASET = "DATASET"  # 数据文件
     GUIDE = "GUIDE"  # 说明文档 / 指导书
+    SCORING_CRITERIA = "SCORING_CRITERIA"  # 评分标准（上传后进知识库，供批改检索）
     OTHER = "OTHER"  # 其它
 
 
-class KnowledgeBizType(StrEnum):
-    """知识文档关联的对象类型。"""
+class KnowledgeDocType(StrEnum):
+    """知识文档用途：决定检索链路与可见范围。"""
 
-    JOB = "JOB"  # 岗位
-    COURSE = "COURSE"  # 课程
-    SYSTEM = "SYSTEM"  # 系统
+    KNOWLEDGE = "KNOWLEDGE"  # 知识问答走这条（学生可问）
+    EVAL_CRITERIA = "EVAL_CRITERIA"  # 评分标准，只供批改链路内部调用
 
 
 class KnowledgeSource(StrEnum):
@@ -192,6 +197,7 @@ class KnowledgeDocStatus(StrEnum):
 class KnowledgeChunkStatus(StrEnum):
     """知识切片状态。"""
 
+    PENDING = "PENDING"  # 已切片待入库
     READY = "READY"  # 可用，向量已写入 Milvus
     FAILED = "FAILED"  # 失败
     DISABLED = "DISABLED"  # 停用
@@ -366,6 +372,10 @@ ENUM_DICTS: tuple[EnumDict, ...] = (
             "CERT_PDF": "证书 PDF",
             "IMPORT": "导入名单",
             "REPORT": "实训报告",
+            "REPORT_TEMPLATE": "报告模板",
+            "DATASET": "数据文件",
+            "GUIDE": "说明文档",
+            "SCORING_CRITERIA": "评分标准",
         },
     ),
     _enum_dict(
@@ -382,14 +392,15 @@ ENUM_DICTS: tuple[EnumDict, ...] = (
             "REPORT_TEMPLATE": "报告模板",
             "DATASET": "数据文件",
             "GUIDE": "说明文档",
+            "SCORING_CRITERIA": "评分标准",
             "OTHER": "其它",
         },
     ),
     _enum_dict(
-        "knowledge_biz_type",
-        "知识文档关联类型",
-        KnowledgeBizType,
-        {"JOB": "岗位", "COURSE": "课程", "SYSTEM": "系统"},
+        "knowledge_doc_type",
+        "知识文档用途",
+        KnowledgeDocType,
+        {"KNOWLEDGE": "知识问答", "EVAL_CRITERIA": "评分标准"},
     ),
     _enum_dict(
         "knowledge_source",
@@ -407,7 +418,7 @@ ENUM_DICTS: tuple[EnumDict, ...] = (
         "knowledge_chunk_status",
         "知识切片状态",
         KnowledgeChunkStatus,
-        {"READY": "可用", "FAILED": "失败", "DISABLED": "停用"},
+        {"PENDING": "待入库", "READY": "可用", "FAILED": "失败", "DISABLED": "停用"},
     ),
     _enum_dict(
         "qa_session_status",

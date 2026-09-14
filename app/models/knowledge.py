@@ -17,10 +17,11 @@ from app.models.base import Base, CreatedAtMixin, SoftDeleteMixin, TimestampMixi
 
 class KnowledgeDocBase(SQLModel):
     title: str = Field(max_length=255, description="知识文档标题")
-    biz_type: str | None = Field(
-        default=None, max_length=30, description="关联对象类型 JOB 岗位 / COURSE 课程 / SYSTEM 系统"
+    doc_type: str = Field(
+        default="KNOWLEDGE",
+        max_length=20,
+        description="KNOWLEDGE 知识问答 / EVAL_CRITERIA 评分标准（评分标准只走后端内部调用）",
     )
-    biz_id: int | None = Field(default=None, description="关联业务 ID")
     file_asset_id: int | None = Field(default=None, foreign_key="file_asset.id", description="文件 ID")
     source: str = Field(default="UPLOAD", max_length=30, description="来源 UPLOAD 文件上传 / TEXT 手工录入")
     description: str | None = Field(default=None, description="说明/描述")
@@ -29,14 +30,21 @@ class KnowledgeDocBase(SQLModel):
         max_length=20,
         description="PARSING 解析中 / READY 可用 / FAILED 失败 / DISABLED 停用",
     )
+    parse_error: str | None = Field(default=None, description="解析或切片失败原因")
+    chunk_strategy: str | None = Field(default=None, max_length=50, description="切分策略版本，换策略时识别旧数据")
     total_chunks: int = Field(default=0, description="切片总数")
     uploaded_by: int | None = Field(default=None, foreign_key="sys_user.id", description="上传人 ID")
 
 
 class KnowledgeDoc(Base, TimestampMixin, SoftDeleteMixin, KnowledgeDocBase, table=True):
-    """RAG 知识库文档（课程资料等）。"""
+    """RAG 知识库文档（岗位资料、项目评分标准等）。
+
+    归属不在这张表上重复存：评分标准通过 ``file_asset → project_file`` 找到所属项目，
+    岗位资料将来加 ``job_file`` 即可（纯增量）。
+    """
 
     __tablename__ = "knowledge_doc"
+    __table_args__ = (Index("idx_knowledge_doc_file_asset", "file_asset_id"),)
 
     id: int | None = Field(default=None, primary_key=True)
 
@@ -50,9 +58,16 @@ class KnowledgeChunkBase(SQLModel):
     content: str = Field(description="切片正文")
     content_hash: str | None = Field(default=None, max_length=64, description="内容哈希")
     char_count: int = Field(default=0, description="字符数")
+    heading_path: str | None = Field(default=None, max_length=512, description="块所属标题路径，引用展示用")
+    page_no: int | None = Field(default=None, description="来源页码（PDF 等）")
+    token_count: int | None = Field(default=None, description="实际 token 数，接模型后回填")
     vector_id: str | None = Field(default=None, max_length=64, description="Milvus 主键")
     model_name: str | None = Field(default=None, max_length=100, description="模型名称")
-    status: str = Field(default="READY", max_length=20, description="READY / FAILED / DISABLED")
+    status: str = Field(
+        default="PENDING",
+        max_length=20,
+        description="PENDING 已切片待入库 / READY 已写入 Milvus / FAILED / DISABLED",
+    )
 
 
 class KnowledgeChunk(Base, TimestampMixin, KnowledgeChunkBase, table=True):

@@ -8,11 +8,27 @@ dependencies = [
     "boto3>=1.43.93",
     "fastapi>=0.141.1",
     "openpyxl>=3.1.5",
+    "pypdf>=5.1",
     "pydantic-settings>=2.15.0",
+    "python-docx>=1.1.2",
     "python-multipart>=0.0.32",
     "sqlalchemy[asyncio]>=2.0.52",
     "sqlmodel>=0.0.42",
     "uvicorn[standard]>=0.52.4",
+]
+
+# RAG 二期依赖单独成组，不装入基础环境：
+# FlagEmbedding 会连带拉 torch + transformers，镜像体积从 ~200MB 涨到 2GB+；
+# pymilvus 需要能连上 Milvus 才有意义。装法：
+#   uv sync --extra rag
+[project.optional-dependencies]
+rag = [
+    "FlagEmbedding>=1.3",
+    "langchain-community",
+    "langchain-core",
+    "langchain-openai",
+    "pymilvus>=2.5",
+    "torch>=2.14",
 ]
 
 [dependency-groups]
@@ -43,3 +59,17 @@ ignore = ["ANN401", "B008"]
 "tests/*" = ["ANN201", "ANN001", "ARG001", "ARG002"]
 "alembic/env.py" = ["ANN001", "ANN201"]
 "scripts/*" = ["ANN201", "ANN001"]
+
+[tool.uv]
+# 硬链接会从用户级 uv 缓存链进 .venv，导致沙箱内读不到部分包文件；统一用复制模式
+link-mode = "copy"
+
+# PyPI 上的 Windows 版 torch 是 CPU 轮子（2.14.0+cpu），跑不了 GPU。
+# RTX 4060 需要 CUDA 轮子，这里单独指到 PyTorch 官方索引。
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }

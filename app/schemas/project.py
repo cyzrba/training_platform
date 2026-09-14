@@ -150,6 +150,11 @@ class ProjectFileRead(TimestampRead, ProjectFileBase):
     content_type: str | None = Field(default=None, description="MIME 类型")
     size_bytes: int = Field(default=0, description="文件大小（字节）")
     download_url: str = Field(description="下载地址")
+    # 下面几项只在"上传评分标准并入库"时返回，其它用途为 null
+    knowledge_doc_id: int | None = Field(default=None, description="知识文档 ID（评分标准入库后）")
+    knowledge_status: str | None = Field(default=None, description="知识文档状态 PARSING/READY/FAILED")
+    chunk_count: int | None = Field(default=None, description="切片数")
+    knowledge_error: str | None = Field(default=None, description="解析或切片失败原因")
 
 
 class TrainingProjectDetail(TrainingProjectRead):

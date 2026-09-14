@@ -11,6 +11,7 @@ from app.api.endpoints import (
     enums,
     health,
     job_skill,
+    knowledge,
     organization,
     projects,
     reviews,
@@ -24,6 +25,7 @@ API_ROUTERS: tuple[APIRouter, ...] = (
     organization.router,
     job_skill.router,
     projects.router,
+    knowledge.router,
     attempts.router,
     reviews.router,
 )

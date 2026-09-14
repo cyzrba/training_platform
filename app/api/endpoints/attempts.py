@@ -8,7 +8,6 @@ from typing import Annotated, Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
-from fastapi.responses import FileResponse
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import DbSession, PageDep
@@ -542,7 +541,7 @@ async def create_file_asset(payload: FileAssetCreate, assets: FileAssetRepo) -> 
     "/file-assets/upload",
     response_model=ApiResponse[FileAssetRead],
     status_code=status.HTTP_201_CREATED,
-    summary="上传文件（写本地存储 + 登记文件台账）",
+    summary="上传文件（写对象存储 + 登记文件台账）",
 )
 async def upload_file_asset(
     assets: FileAssetRepo,
@@ -552,15 +551,16 @@ async def upload_file_asset(
     ] = "OTHER",
     uploader_id: Annotated[int | None, Form(description="上传人 ID")] = None,
 ) -> FileAsset:
-    """文件落盘到 ``<upload_dir>/<bucket>/<biz_type>/<年月>/<uuid>_<安全文件名>``，并写 file_asset 台账。"""
+    """对象写入 ``<bucket>/misc/<biz_type>/<年月>/<uuid>_<安全文件名>``，并写 file_asset 台账。"""
     content = await file.read()
-    stored = storage.save_bytes(content, filename=file.filename or "unnamed", biz_type=biz_type)
+    original_name = storage.clean_upload_name(file.filename)
+    stored = storage.save_bytes(content, filename=original_name, biz_type=biz_type)
     return await assets.create(
         {
             "uploader_id": uploader_id,
             "bucket": stored.bucket,
             "object_key": stored.object_key,
-            "original_name": file.filename or "unnamed",
+            "original_name": original_name,
             "content_type": file.content_type,
             "size_bytes": stored.size_bytes,
             "sha256": stored.sha256,
@@ -574,29 +574,23 @@ async def upload_file_asset(
     summary="下载文件（返回文件流，不包统一响应体）",
 )
 async def download_file_asset(asset_id: int, assets: FileAssetRepo) -> Response:
-    """本地后端直接送文件路径（零拷贝），对象存储后端把对象读出来返回。"""
+    """从对象存储读出对象，按附件的原始文件名作为下载名返回。"""
     asset = await assets.get(asset_id)
     if asset is None:
         raise NotFoundError(f"文件 {asset_id} 不存在")
+    content = storage.read_bytes(asset.bucket, asset.object_key)
     media_type = asset.content_type or "application/octet-stream"
-    if storage.is_object_storage(asset.bucket):
-        content = storage.read_bytes(asset.bucket, asset.object_key)
-        # HTTP 头只能是 latin-1，中文文件名要按 RFC 5987 编码（与 FileResponse 的行为一致）
-        quoted = quote(asset.original_name)
-        disposition = (
-            f"attachment; filename*=utf-8''{quoted}"
-            if quoted != asset.original_name
-            else f'attachment; filename="{asset.original_name}"'
-        )
-        return Response(
-            content=content,
-            media_type=media_type,
-            headers={"Content-Disposition": disposition},
-        )
-    return FileResponse(
-        storage.path_of(asset.bucket, asset.object_key),
+    # HTTP 头只能是 latin-1，中文文件名要按 RFC 5987 编码
+    quoted = quote(asset.original_name)
+    disposition = (
+        f"attachment; filename*=utf-8''{quoted}"
+        if quoted != asset.original_name
+        else f'attachment; filename="{asset.original_name}"'
+    )
+    return Response(
+        content=content,
         media_type=media_type,
-        filename=asset.original_name,
+        headers={"Content-Disposition": disposition},
     )
 
 

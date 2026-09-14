@@ -205,10 +205,8 @@ async def test_demo_seed_stage_items(db_session) -> None:
 @pytest.mark.asyncio
 async def test_demo_seed_project_files(db_session) -> None:
     """项目附件演示数据：每个项目都有报告模板，文件台账与磁盘文件都在。"""
-    from pathlib import Path
-
-    from app.core.config import settings
     from app.crud.project import ProjectFileRepository
+    from app.services import storage
 
     await RoleRepository(db_session).create({"role_code": "TEACHER", "role_name": "教师"})
     await run_demo_seed(db_session)
@@ -222,18 +220,16 @@ async def test_demo_seed_project_files(db_session) -> None:
         assert [(link.file_kind, link.title) for link in links] == [
             (item["file_kind"], item["title"]) for item in expected
         ]
-        # 报告模板必须有；磁盘上能按 bucket/object_key 找到文件
+        # 报告模板必须有
         assert any(link.file_kind == "REPORT_TEMPLATE" for link in links)
 
-    # 抽查一条：文件真实落盘且大小与台账一致
+    # 抽查一条：对象真实落在对象存储里，且大小与台账一致
     sample = await files.list_of_project((await projects.by_name("工业缺陷检测实训")).id)
     from app.crud.attempt import FileAssetRepository
 
     asset = await FileAssetRepository(db_session).get(sample[0].file_asset_id)
     assert asset is not None
-    path = Path(settings.resolved_upload_dir) / asset.bucket / asset.object_key
-    assert path.is_file()
-    assert path.stat().st_size == asset.size_bytes
+    assert len(storage.read_bytes(asset.bucket, asset.object_key)) == asset.size_bytes
 
 
 @pytest.mark.asyncio

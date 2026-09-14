@@ -1,5 +1,6 @@
 """测试夹具：内存 SQLite 数据库（复用生产同款 PRAGMA 设置）。"""
 
+import os
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -16,12 +17,24 @@ from app.main import app
 from app.models import Base
 from app.services import storage
 
+MINIO_ENDPOINT = os.environ.get("TEST_S3_ENDPOINT", "http://127.0.0.1:9000")
+#: 测试对象单独放一个桶，和开发桶 training-platform 里的真实文件隔离
+TEST_BUCKET = os.environ.get("TEST_S3_BUCKET", "training-platform-test")
+
 
 @pytest_asyncio.fixture(autouse=True)
-async def local_storage(tmp_path, monkeypatch) -> AsyncGenerator[None, None]:
-    """测试统一用本地存储后端 + 临时目录，避免依赖 MinIO，也不往仓库里写文件。"""
-    monkeypatch.setattr(settings, "storage_backend", "local")
-    monkeypatch.setattr(settings, "upload_dir", str(tmp_path / "uploads"))
+async def object_storage(monkeypatch) -> AsyncGenerator[None, None]:
+    """测试统一指向本机 MinIO 的测试桶。
+
+    存储层只有 S3 一种后端，所以跑测试前要有可用的 MinIO：
+    ``docker compose -f deploy/docker-compose.rag.yml up -d``。
+    地址、账号、桶名都可以用环境变量覆盖（TEST_S3_ENDPOINT / TEST_S3_ACCESS_KEY /
+    TEST_S3_SECRET_KEY / TEST_S3_BUCKET），方便在 CI 里指向别的 MinIO。
+    """
+    monkeypatch.setattr(settings, "s3_endpoint", MINIO_ENDPOINT)
+    monkeypatch.setattr(settings, "s3_access_key", os.environ.get("TEST_S3_ACCESS_KEY", "minioadmin"))
+    monkeypatch.setattr(settings, "s3_secret_key", os.environ.get("TEST_S3_SECRET_KEY", "minioadmin123"))
+    monkeypatch.setattr(settings, "s3_bucket", TEST_BUCKET)
     monkeypatch.setattr(settings, "max_upload_mb", 5)
     storage.reset_client_cache()
     yield

@@ -943,7 +943,7 @@ async def run_demo_seed(session: AsyncSession | None = None) -> dict[str, int]:
                 await project_skills.add_skill(project.id, node_id)
                 stats["project_skills"] += 1
 
-            # 项目附件：报告模板、数据文件（文件落本地存储，元数据进 file_asset）
+            # 项目附件：报告模板、数据文件（文件落对象存储，元数据进 file_asset）
             existing_files = {
                 (link.file_kind, link.title) for link in await project_files.list_of_project(project.id)
             }
