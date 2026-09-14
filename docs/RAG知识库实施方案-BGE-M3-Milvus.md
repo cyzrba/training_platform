@@ -1,5 +1,8 @@
 # RAG 知识库实施方案（BGE-M3 + BGE-Reranker-v2-m3 + Milvus + LangChain）
 
+> **已过期（2026-09-14）**：请以 [RAG系统实施方案.md](RAG系统实施方案.md) 为准。
+> 本文的 `kb_domain` + `owner_type`/`owner_id` 双轴设计已被简化为单列 `doc_type`，模型配置已收进 `system_config`。
+
 - 状态：**待评审**
 - 日期：2026-09-11
 - 关联：`docs/数据库表字段清单.md` §7 H 域、`app/models/knowledge.py`、`app/models/attempt.py`（`file_asset`）
