@@ -19,7 +19,7 @@ from typing import Any
 from sqlmodel import func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.core.db import SessionLocal
+from app.core.db import SessionLocal, engine
 from app.core.time import now
 from app.crud.account import RoleRepository, UserRepository, UserRoleRepository
 from app.crud.attempt import (
@@ -1094,8 +1094,20 @@ async def run_demo_seed(session: AsyncSession | None = None) -> dict[str, int]:
     return stats
 
 
+async def _seed_and_release() -> dict[str, int]:
+    """写演示数据，结束后释放连接池，让 SQLite 把 -wal 落盘。
+
+    WAL 模式下只有最后一个连接关闭时才会 checkpoint；CLI 进程若不释放引擎，
+    data/app.db-wal 会一直留着，只读 app.db 的工具就会看不到刚写入的数据。
+    """
+    try:
+        return await run_demo_seed()
+    finally:
+        await engine.dispose()
+
+
 def main() -> None:
-    stats = asyncio.run(run_demo_seed())
+    stats = asyncio.run(_seed_and_release())
     print("演示数据写入完成：")
     for key, value in stats.items():
         print(f"  {key:18} 新增 {value}")
