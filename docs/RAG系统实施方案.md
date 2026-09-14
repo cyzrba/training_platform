@@ -432,21 +432,24 @@ langchain-openai
 `.env` 只放**引导性**配置（连不上库时也要能启动）：
 
 ```
-# 配置解密密钥（若启用加密），不进 git
-CONFIG_SECRET_KEY=
-
-# 上传与存储（已有）
-STORAGE_BACKEND=local
-UPLOAD_DIR=
+# 存储：S3 协议对象存储（MinIO / 阿里云 OSS / AWS S3），文件本体不进库
+S3_ENDPOINT=http://127.0.0.1:9000
+S3_ACCESS_KEY=minioadmin
+S3_SECRET_KEY=minioadmin123
+S3_BUCKET=training-platform
+S3_REGION=us-east-1
 MAX_UPLOAD_MB=50
 
 # 知识切片（单位：字符）
 KNOWLEDGE_CHUNK_SIZE_CHARS=800
 KNOWLEDGE_CHUNK_OVERLAP_CHARS=120
 KNOWLEDGE_MAX_CHUNK_CHARS=20000
+# 评分标准这类"整份使用"的文档：正文不超过这个长度就整份作为一块
+KNOWLEDGE_WHOLE_DOC_MAX_CHARS=6000
 ```
 
-模型、api key、Milvus、检索参数**全部走 `system_config`**，不写 `.env`。
+存储层只有 S3 一种实现（早期那版 `STORAGE_BACKEND` / `UPLOAD_DIR` 已随本地磁盘后端一起去掉），
+所以这几个 S3 键是**必填**的。模型、api key、Milvus、检索参数**全部走 `system_config`**，不写 `.env`。
 
 ---
 

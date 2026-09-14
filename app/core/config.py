@@ -53,7 +53,6 @@ class Settings(BaseSettings):
     knowledge_max_chunk_chars: int = 20000
 
     default_page_size: int = 20
-    max_page_size: int = 200
 
     @property
     def sqlite_file(self) -> Path:
