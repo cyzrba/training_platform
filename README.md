@@ -60,6 +60,7 @@ uv run uvicorn app.main:app --reload     # 接口文档 http://127.0.0.1:8000/do
 
 ```bash
 uv run python scripts/check_db.py        # 表 / 索引 / 外键是否与模型一致
+uv run python scripts/check_data.py      # 用接口把测试数据体检一遍（入班/选岗/权重/结算/技能进度）
 uv run python scripts/check_milvus.py    # 稀疏向量、混合检索、标量过滤、别名切换
 uv run python scripts/check_models.py    # BGE-M3 与重排模型能否加载并推理（含显存峰值）
 uv run pytest                            # 全量测试；缺 Milvus / 模型的用例会自动跳过

@@ -594,6 +594,31 @@ async def _ensure_skill_nodes(client: httpx.AsyncClient) -> list[dict]:
     return nodes
 
 
+async def _ensure_student_role(client: httpx.AsyncClient, *, user_id: int) -> bool:
+    """给新建的学生账号补上 STUDENT 角色。
+
+    ``POST /api/users`` 只建账号、不挂角色，而平台是按角色控制菜单与权限的
+    （教师端 / 学生端的分界就在这）。这个接口是**覆盖式**的，所以先把已有角色读出来再合并，
+    免得重复执行时把别人手工加的角色冲掉。返回是否真的补了。
+    """
+    student_role = next(
+        (item for item in await _page_of(client, "/api/roles") if item["role_code"] == "STUDENT"),
+        None,
+    )
+    if student_role is None:
+        return False
+    current = {item["id"] for item in await call(client, "get", f"/api/users/{user_id}/roles")}
+    if student_role["id"] in current:
+        return False
+    await call(
+        client,
+        "post",
+        f"/api/users/{user_id}/roles",
+        json={"role_ids": sorted(current | {student_role["id"]})},
+    )
+    return True
+
+
 async def run(*, user_no: str, project_name: str, run_review: bool) -> None:
     async with SessionLocal() as session:
 
@@ -637,7 +662,7 @@ async def _seed(client: httpx.AsyncClient, *, user_no: str, project_name: str, r
         },
     )
     project_id = project["id"]
-    print(f"[1/8] 项目已创建：#{project_id} {project_name}")
+    print(f"[1/9] 项目已创建：#{project_id} {project_name}")
 
     # 七个标准模块 + 每个模块的引导子标题（顺序即关卡顺序）
     for order, key in enumerate(STAGE_GUIDES, start=1):
@@ -700,6 +725,7 @@ async def _seed(client: httpx.AsyncClient, *, user_no: str, project_name: str, r
         "/api/users",
         json={"user_no": user_no, "real_name": "案例演示学生", "user_type": "STUDENT"},
     )
+    granted_role = await _ensure_student_role(client, user_id=student["id"])
 
     # 班级与岗位：审核列表的班级列、数据总览的岗位热度、学习过程统计、技能树都挂在
     # 这两条关联上；不建的话学生在业务上是"游离"的，下游页面全是空的。
@@ -725,9 +751,10 @@ async def _seed(client: httpx.AsyncClient, *, user_no: str, project_name: str, r
             added_skills += 1
 
     attempt = await call(client, "post", f"/api/students/{student['id']}/projects/{project_id}/start")
+    extras = "、STUDENT 角色" if granted_role else ""
     print(
         f"[6/9] 学生 #{student['id']} 已入班「{classroom['class_name']}」、"
-        f"选岗「{job['job_name']}」（补 {added_skills} 个岗位技能）；"
+        f"选岗「{job['job_name']}」（补 {added_skills} 个岗位技能{extras}）；"
         f"开始闯关，轮次 #{attempt['id']}，共 {len(attempt['stages'])} 关"
     )
 
