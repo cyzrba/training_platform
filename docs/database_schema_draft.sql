@@ -93,6 +93,7 @@ CREATE TABLE class_info (
     class_name      varchar(100) NOT NULL,
     grade_year      smallint,                            -- 届/年级
     head_teacher_id bigint REFERENCES sys_user (id),     -- 负责教师
+    head_teacher_name varchar(50),                       -- 负责教师姓名快照（SSO 接入前本地维护）
     group_count     smallint     NOT NULL DEFAULT 1,     -- 列表展示冗余
     remark          varchar(255),
     status          varchar(20)  NOT NULL DEFAULT 'ACTIVE', -- ACTIVE/ARCHIVED

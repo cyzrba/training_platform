@@ -23,6 +23,7 @@ class ClassInfoUpdate(SQLModel):
     class_name: str | None = Field(default=None, max_length=100)
     grade_year: int | None = None
     head_teacher_id: int | None = None
+    head_teacher_name: str | None = Field(default=None, max_length=50)
     group_count: int | None = Field(default=None, ge=0, le=99)
     remark: str | None = Field(default=None, max_length=255)
     status: str | None = Field(default=None, max_length=20)

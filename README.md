@@ -96,6 +96,13 @@ uv run python scripts/prune_qa_history.py --dry-run      # 看会清理掉哪些
 uv run python scripts/prune_qa_history.py                # 清理保留期外的问答历史（挂 cron 用）
 ```
 
+### 教师端联调补充
+
+教师端的班级管理已对接本后端。拉取包含 `a7e1b3c9d420_add_class_head_teacher_name.py`
+的更新后，先执行 `uv run alembic upgrade head`（或 `uv run python -m app.db.init_db`），
+再启动服务。该迁移会为班级增加“负责教师姓名快照”字段，供学校统一身份认证接入前的本地联调使用；
+后续接入学校教师账户时可继续使用已有的 `head_teacher_id` 关联字段。
+
 ### 造一套完整案例数据（三端稳压管引脚检测）
 
 按《工业视觉检测项目交付流程——三端稳压管案例版》一键走完全链路，用来验证环境是否真的通了：

@@ -14,6 +14,8 @@ class ClassInfoBase(SQLModel):
     class_name: str = Field(max_length=100, description="班级名称")
     grade_year: int | None = Field(default=None, description="届/年级")
     head_teacher_id: int | None = Field(default=None, foreign_key="sys_user.id", description="负责教师")
+    # 统一认证接入前，教师端可先保存负责人显示名；认证接入后可同时维护账户关联。
+    head_teacher_name: str | None = Field(default=None, max_length=50, description="负责教师姓名快照")
     group_count: int = Field(default=1, description="分组数量（列表展示冗余）")
     remark: str | None = Field(default=None, max_length=255, description="备注")
     status: str = Field(default="ACTIVE", max_length=20, description="ACTIVE 在读 / ARCHIVED 归档")
