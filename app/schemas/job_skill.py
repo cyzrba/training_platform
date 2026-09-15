@@ -246,6 +246,92 @@ class ProjectSkillRead(CreatedAtRead, ProjectSkillBase):
     id: int
 
 
+# ---------------------------------------------------------------- 岗位推荐视图
+
+
+class JobSkillProgressItem(SQLModel):
+    """岗位关联的一个技能点：进度来自 student_skill，项目数由 project_skill 推导。"""
+
+    skill_node_id: int = Field(description="技能节点 ID")
+    node_code: str = Field(description="技能节点编码")
+    node_name: str = Field(description="技能节点名称")
+    progress: float = Field(default=0, description="该技能点的进度 0~100")
+
+
+class JobSkillGroup(SQLModel):
+    """按技能树（四大体系）分组的岗位技能点。"""
+
+    tree_id: int = Field(description="技能树 ID")
+    tree_code: str | None = Field(default=None, description="技能树编码")
+    tree_name: str | None = Field(default=None, description="技能树名称")
+    skill_total_count: int = Field(default=0, description="该体系下岗位关联的技能点总数")
+    skill_done_count: int = Field(default=0, description="其中进度已达 100% 的个数")
+    skills: list[JobSkillProgressItem] = Field(default_factory=list, description="技能点进度明细")
+
+
+class JobRecommendation(SQLModel):
+    """岗位推荐条目：岗位画像 + 该学生的技能匹配情况。"""
+
+    job_id: int
+    job_name: str = Field(description="岗位名称")
+    direction_tag: str | None = Field(default=None, description="岗位方向标签")
+    recommended_level: str | None = Field(
+        default=None, description="推荐等级 BASIC 基础 / ADVANCED 进阶 / EXPANDED 拓展"
+    )
+    scene: str | None = Field(default=None, description="适配实训场景")
+    description: str | None = Field(default=None, description="岗位描述")
+    heat: int = Field(default=0, description="岗位热度")
+    match_score: float = Field(default=0, description="匹配度 0~100 = 岗位关联技能点进度均值，排序依据")
+    skill_total_count: int = Field(default=0, description="岗位关联技能点总数")
+    skill_done_count: int = Field(default=0, description="其中进度已达 100% 的个数")
+    project_total_count: int = Field(default=0, description="岗位关联的已发布项目总数")
+    project_done_count: int = Field(default=0, description="其中该学生已完成的个数")
+    skill_groups: list[JobSkillGroup] = Field(
+        default_factory=list, description="岗位技能点，按技能树体系分组"
+    )
+
+
+# ------------------------------------------------------------ 技能树进度视图
+
+
+class SkillNodeProgressItem(SQLModel):
+    """技能节点 + 该学生的进度。"""
+
+    skill_node_id: int = Field(description="技能节点 ID")
+    node_code: str = Field(description="技能节点编码")
+    node_name: str = Field(description="技能节点名称")
+    description: str | None = Field(default=None, description="技能点说明")
+    status: str = Field(default="ENABLED", description="ENABLED / DISABLED")
+    progress: float = Field(default=0, description="技能点进度 0~100")
+    project_total: int = Field(default=0, description="培养该技能点的已发布项目总数")
+    project_done: int = Field(default=0, description="其中该学生已完成的个数")
+
+
+class SkillTreeProgress(SQLModel):
+    """技能树 + 该树的总进度与该学生的节点进度。"""
+
+    tree_id: int = Field(description="技能树 ID")
+    tree_code: str = Field(description="技能树编码")
+    tree_name: str = Field(description="技能树名称")
+    description: str | None = Field(default=None, description="技能树说明")
+    status: str = Field(default="ENABLED", description="ENABLED / DISABLED")
+    total: int = Field(default=0, description="该技能树的技能点总数")
+    done: int = Field(default=0, description="其中进度已达 100% 的个数")
+    percent: float = Field(default=0, description="该技能树的总进度 0~100 = 技能点进度均值")
+    nodes: list[SkillNodeProgressItem] = Field(default_factory=list, description="技能节点列表")
+
+
+class SkillTreeProgressOverview(SQLModel):
+    """技能树总览：全部技能树与技能节点 + 整体统计（四个体系的整体进度等）。"""
+
+    student_id: int = Field(description="学生 ID")
+    tree_count: int = Field(default=0, description="技能树数量")
+    total_nodes: int = Field(default=0, description="所有技能点总数")
+    done_nodes: int = Field(default=0, description="进度已达 100% 的技能点个数")
+    overall_percent: float = Field(default=0, description="四个技能树的整体进度 0~100 = 全部技能点进度均值")
+    trees: list[SkillTreeProgress] = Field(default_factory=list, description="技能树列表（含节点进度）")
+
+
 __all__ = [
     "GrowthRuleCreate",
     "GrowthRuleRead",
@@ -253,7 +339,10 @@ __all__ = [
     "JobCreate",
     "JobDetail",
     "JobRead",
+    "JobRecommendation",
     "JobSkillCreate",
+    "JobSkillGroup",
+    "JobSkillProgressItem",
     "JobSkillRead",
     "JobSkillSetIn",
     "JobUpdate",
@@ -265,9 +354,12 @@ __all__ = [
     "SkillNodeDependencyRead",
     "SkillNodeDependencySetIn",
     "SkillNodeDetail",
+    "SkillNodeProgressItem",
     "SkillNodeRead",
     "SkillNodeUpdate",
     "SkillTreeCreate",
+    "SkillTreeProgress",
+    "SkillTreeProgressOverview",
     "SkillTreeRead",
     "SkillTreeUpdate",
     "StudentJobCreate",

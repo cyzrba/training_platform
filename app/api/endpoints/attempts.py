@@ -40,6 +40,7 @@ from app.schemas.attempt import (
     StudentProjectDetail,
     StudentProjectRead,
     StudentProjectUpdate,
+    StudentTrainingProject,
     SubmissionObjectionIn,
 )
 from app.schemas.base import ApiResponse, MessageOut, Page, PageParams
@@ -53,6 +54,7 @@ from app.services.attempt import (
     submit_attempt,
     withdraw_submission,
 )
+from app.services.student_overview import student_projects
 
 router = APIRouter(route_class=EnvelopeRoute, tags=["闯关评审"])
 
@@ -269,6 +271,22 @@ async def list_projects_of_student(
         record_attempts = await attempts.list_of_record(record["id"])
         items.append({**record, "attempts": record_attempts})
     return items
+
+
+@router.get(
+    "/students/{student_id}/training-projects",
+    response_model=ApiResponse[list[StudentTrainingProject]],
+    summary="学生的实训项目列表（最高分 / 关卡进度 / 所属岗位 / 关联技能点 / 状态）",
+)
+async def list_training_projects_of_student(student_id: int, db: DbSession, students: UserRepo) -> list[dict]:
+    """已发布的实训项目 + 该学生的最高分、当前关卡进度（总/完成）、岗位、技能点与项目状态。
+
+    学生没开始过的项目也会返回（``status=NOT_STARTED``、成绩为 null、进度 0/关卡总数），
+    前端按需过滤即可；``level_done`` 取最新一轮闯关已填写的关卡数，重新挑战会从 0 重新计。
+    """
+    if await students.get(student_id) is None:
+        raise NotFoundError(f"学生 {student_id} 不存在")
+    return await student_projects(db, student_id)
 
 
 @router.get(

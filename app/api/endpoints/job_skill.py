@@ -34,6 +34,7 @@ from app.schemas.job_skill import (
     JobCreate,
     JobDetail,
     JobRead,
+    JobRecommendation,
     JobSkillSetIn,
     JobUpdate,
     SkillNodeCreateIn,
@@ -42,6 +43,7 @@ from app.schemas.job_skill import (
     SkillNodeRead,
     SkillNodeUpdate,
     SkillTreeCreate,
+    SkillTreeProgressOverview,
     SkillTreeRead,
     SkillTreeUpdate,
     StudentJobDetail,
@@ -52,6 +54,7 @@ from app.schemas.job_skill import (
 )
 from app.schemas.review import SkillRecalcResult
 from app.services.skill import recalculate_student_skills
+from app.services.student_overview import recommend_jobs, skill_tree_progress
 
 router = APIRouter(route_class=EnvelopeRoute, tags=["岗位技能"])
 
@@ -644,6 +647,41 @@ async def recalculate_skills(student_id: int, db: DbSession, students: UserRepo)
     await _student_or_404(students, student_id)
     skills = await recalculate_student_skills(db, student_id)
     return SkillRecalcResult(student_id=student_id, updated=len(skills))
+
+
+# ------------------------------------------------------- 岗位推荐与技能树总览
+
+
+@router.get(
+    "/students/{student_id}/job-recommendations",
+    response_model=ApiResponse[list[JobRecommendation]],
+    summary="学生岗位推荐（默认前三名，按技能匹配度倒序）",
+)
+async def list_job_recommendations(
+    student_id: int,
+    db: DbSession,
+    students: UserRepo,
+    limit: Annotated[int, Query(ge=1, le=50, description="返回条数，默认 3（前三名）")] = 3,
+) -> list[dict]:
+    """按学生技能进度推荐岗位，默认返回前三名。
+
+    匹配度 = 岗位关联技能点进度的均值；排序：匹配度 → 已达 100% 的技能点数 → 热度 → 岗位 ID。
+    每条结果带岗位画像（方向 / 推荐等级 / 适配场景 / 描述 / 热度）、技能点与项目完成情况，
+    以及按技能树体系（四大体系）分组的技能点进度明细。
+    """
+    await _student_or_404(students, student_id)
+    return await recommend_jobs(db, student_id, limit=limit)
+
+
+@router.get(
+    "/students/{student_id}/skill-tree-progress",
+    response_model=ApiResponse[SkillTreeProgressOverview],
+    summary="学生技能树总览（全部技能树与技能点 + 整体进度）",
+)
+async def get_skill_tree_progress(student_id: int, db: DbSession, students: UserRepo) -> dict:
+    """返回全部技能树与技能节点（含每个节点的进度），以及技能树总进度、整体进度与技能点统计。"""
+    await _student_or_404(students, student_id)
+    return await skill_tree_progress(db, student_id)
 
 
 __all__ = ["router"]

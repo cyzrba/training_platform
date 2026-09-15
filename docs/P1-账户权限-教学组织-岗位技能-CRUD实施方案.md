@@ -119,6 +119,15 @@ flowchart LR
 | GET/POST/DELETE | `/api/students/{student_id}/jobs` | 学生选岗 / 设主岗位（唯一主岗位）/ 取消 | JOB_MANAGE |
 | GET | `/api/students/{student_id}/skills` | 学生技能进度（按技能树分组） | SKILL_MANAGE |
 | PATCH | `/api/students/{student_id}/skills/{skill_id}` | 手工调整（`source=MANUAL`） | SKILL_MANAGE |
+| GET | `/api/students/{student_id}/job-recommendations` | 岗位推荐（默认前三名，按技能匹配度倒序，技能点按体系分组） | 登录学生本人 |
+| GET | `/api/students/{student_id}/skill-tree-progress` | 技能树总览（全部技能树与技能点 + 单树/整体进度与技能点统计） | 登录学生本人 |
+
+两个推荐视图都是**只读派生**，口径与 `app/services/skill.py` 完全一致，不落库：
+
+- **技能点进度**取 `student_skill.progress`（0~100，"完成项目数 ÷ 关联项目总数"×100，手工调整记 MANUAL）；
+- **岗位匹配度** = 岗位关联技能点进度的**均值**；推荐排序：匹配度 → 已达 100% 的技能点数 → 岗位热度 → 岗位 ID；
+  没关联技能点的岗位算不出匹配度，不参与推荐；岗位的关联项目 = `training_project.job_id` 指向该岗位且已发布（PUBLISHED）的项目；
+- **技能树进度 / 整体进度** = 其下技能点进度的均值；`total_nodes` / `done_nodes` 是技能点总数与进度达 100% 的个数。
 
 ### 3.4 Excel 导入细则
 

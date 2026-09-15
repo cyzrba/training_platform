@@ -65,6 +65,44 @@ class StudentProjectDetail(StudentProjectRead):
     attempts: list["TrainingAttemptRead"] = Field(default_factory=list, description="闯关轮次")
 
 
+# ------------------------------------------------- 学生的实训项目成长视图
+
+
+class ProjectSkillNodeItem(SQLModel):
+    """项目关联的一个技能点（带所属技能树体系）。"""
+
+    skill_node_id: int = Field(description="技能节点 ID")
+    node_code: str = Field(description="技能节点编码")
+    node_name: str = Field(description="技能节点名称")
+    tree_id: int = Field(description="所属技能树 ID")
+    tree_code: str | None = Field(default=None, description="所属技能树编码")
+    tree_name: str | None = Field(default=None, description="所属技能树名称")
+
+
+class StudentTrainingProject(SQLModel):
+    """学生的实训项目：项目信息 + 这个学生的最高分、关卡进度与状态。"""
+
+    project_id: int = Field(description="项目 ID")
+    project_name: str = Field(description="实训项目名称")
+    project_level: str = Field(description="项目层级 BASIC 基础 / ADVANCED 进阶 / EXPANDED 拓展")
+    job_id: int | None = Field(default=None, description="所属岗位 ID")
+    job_name: str | None = Field(default=None, description="所属岗位名称")
+    status: str = Field(
+        default="NOT_STARTED",
+        description=(
+            "当前项目状态 NOT_STARTED 未开始 / IN_PROGRESS 进行中 / SUBMITTED 已提交 / COMPLETED 已完成"
+        ),
+    )
+    best_score: float | None = Field(
+        default=None, description="该学生在这个项目的最高分（历史最高，只升不降）"
+    )
+    total_score: float | None = Field(default=None, description="该学生在这个项目的最新成绩")
+    progress: float = Field(default=0, description="关卡进度百分比 0~100 = 已填写关卡 ÷ 关卡总数")
+    level_total: int = Field(default=0, description="关卡总数")
+    level_done: int = Field(default=0, description="已完成关卡数（最新一轮闯关里已填写的关卡数）")
+    skill_nodes: list[ProjectSkillNodeItem] = Field(default_factory=list, description="关联的技能点")
+
+
 # ------------------------------------------------------------------- 闯关轮次
 
 
@@ -198,10 +236,12 @@ __all__ = [
     "SubmissionObjectionIn",
     "ProjectSubmissionRead",
     "ProjectSubmissionUpdate",
+    "ProjectSkillNodeItem",
     "AttemptDetail",
     "StudentProjectCreate",
     "StudentProjectDetail",
     "StudentProjectRead",
+    "StudentTrainingProject",
     "StudentProjectUpdate",
     "TrainingAttemptCreate",
     "TrainingAttemptRead",
