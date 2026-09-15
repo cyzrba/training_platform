@@ -33,6 +33,7 @@ from app.schemas.job_skill import (
     GrowthRuleUpdate,
     JobCreate,
     JobDetail,
+    JobProjectProgress,
     JobRead,
     JobRecommendation,
     JobSkillSetIn,
@@ -54,7 +55,11 @@ from app.schemas.job_skill import (
 )
 from app.schemas.review import SkillRecalcResult
 from app.services.skill import recalculate_student_skills
-from app.services.student_overview import recommend_jobs, skill_tree_progress
+from app.services.student_overview import (
+    job_project_progress,
+    recommend_jobs,
+    skill_tree_progress,
+)
 
 router = APIRouter(route_class=EnvelopeRoute, tags=["岗位技能"])
 
@@ -682,6 +687,28 @@ async def get_skill_tree_progress(student_id: int, db: DbSession, students: User
     """返回全部技能树与技能节点（含每个节点的进度），以及技能树总进度、整体进度与技能点统计。"""
     await _student_or_404(students, student_id)
     return await skill_tree_progress(db, student_id)
+
+
+@router.get(
+    "/students/{student_id}/job-project-progress",
+    response_model=ApiResponse[JobProjectProgress],
+    summary="学生所选岗位的实训项目进度（基础/进阶/拓展的总数与已完成数）",
+)
+async def get_job_project_progress(
+    student_id: int,
+    db: DbSession,
+    students: UserRepo,
+    job_id: Annotated[
+        int | None, Query(description="指定岗位，留空取学生当前主岗位（没有则取最近选的）")
+    ] = None,
+) -> dict:
+    """按学生选择的岗位统计实训项目：基础 / 进阶 / 拓展三档各有多少个、完成了多少个。
+
+    只统计该岗位下已发布（PUBLISHED）的项目；已完成按 ``student_project.completed_at`` 判定。
+    一个岗位都没选时返回 ``job_id=null`` 且三档全 0，前端可据此引导去选岗。
+    """
+    await _student_or_404(students, student_id)
+    return await job_project_progress(db, student_id, job_id=job_id)
 
 
 __all__ = ["router"]

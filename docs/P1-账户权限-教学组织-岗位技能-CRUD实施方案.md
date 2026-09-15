@@ -121,13 +121,20 @@ flowchart LR
 | PATCH | `/api/students/{student_id}/skills/{skill_id}` | 手工调整（`source=MANUAL`） | SKILL_MANAGE |
 | GET | `/api/students/{student_id}/job-recommendations` | 岗位推荐（默认前三名，按技能匹配度倒序，技能点按体系分组） | 登录学生本人 |
 | GET | `/api/students/{student_id}/skill-tree-progress` | 技能树总览（全部技能树与技能点 + 单树/整体进度与技能点统计） | 登录学生本人 |
+| GET | `/api/students/{student_id}/job-project-progress` | 所选岗位的项目分档进度（基础/进阶/拓展各多少关、各完成多少，`job_id` 可选） | 登录学生本人 |
+| GET | `/api/students/{student_id}/projects/{project_id}` | 项目详情（任务简介 / 关卡与子标题简介 / 本轮已保存的作答 / 历史提交与 AI·教师评语） | 登录学生本人 |
+| PUT | `/api/attempts/{attempt_id}/answers` | 保存作答（草稿）：一次存多个关卡，默认不改关卡完成状态，下次进来接着写 | 登录学生本人 |
 
-两个推荐视图都是**只读派生**，口径与 `app/services/skill.py` 完全一致，不落库：
+上面这些视图都是**只读派生**，口径与 `app/services/skill.py` 完全一致，不落库：
 
 - **技能点进度**取 `student_skill.progress`（0~100，"完成项目数 ÷ 关联项目总数"×100，手工调整记 MANUAL）；
 - **岗位匹配度** = 岗位关联技能点进度的**均值**；推荐排序：匹配度 → 已达 100% 的技能点数 → 岗位热度 → 岗位 ID；
   没关联技能点的岗位算不出匹配度，不参与推荐；岗位的关联项目 = `training_project.job_id` 指向该岗位且已发布（PUBLISHED）的项目；
 - **技能树进度 / 整体进度** = 其下技能点进度的均值；`total_nodes` / `done_nodes` 是技能点总数与进度达 100% 的个数。
+
+岗位项目进度同样只读派生：岗位不传 `job_id` 时取学生当前主岗位（没有主岗位取最近选的），
+只统计该岗位下已发布的项目，已完成按 `student_project.completed_at` 判定；层级文案（基础/进阶/拓展）
+从 `GET /api/enums` 的 `learning_level` 取，不在业务代码里硬编码。
 
 ### 3.4 Excel 导入细则
 

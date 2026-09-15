@@ -19,6 +19,7 @@ from app.crud.project import ProjectModuleRepository, TrainingProjectRepository
 RECOMMEND = "/api/students/{student_id}/job-recommendations"
 OVERVIEW = "/api/students/{student_id}/skill-tree-progress"
 PROJECTS = "/api/students/{student_id}/training-projects"
+JOB_PROGRESS = "/api/students/{student_id}/job-project-progress"
 
 
 # --------------------------------------------------------------------- 造数
@@ -59,12 +60,13 @@ async def _project(
     skill_node_ids: list[int],
     *,
     status: str = "PUBLISHED",
+    level: str = "BASIC",
 ) -> dict:
     """直接落库建项目（跳过发布校验），只为拿到"岗位 → 项目 → 技能点"的关联数据。"""
     project = await TrainingProjectRepository(db).create(
         {
             "project_name": name,
-            "project_level": "BASIC",
+            "project_level": level,
             "job_id": job_id,
             "status": status,
         }
@@ -348,4 +350,67 @@ async def test_student_training_projects_view(client: httpx.AsyncClient, db_sess
     assert [node["node_name"] for node in second["skill_nodes"]] == ["光源与打光"]
 
     missing = await client.get(PROJECTS.format(student_id=999))
+    assert missing.json()["code"] == 422
+
+
+@pytest.mark.asyncio
+async def test_job_project_progress_by_level(client: httpx.AsyncClient, db_session: AsyncSession) -> None:
+    """岗位项目进度：按基础 / 进阶 / 拓展统计"总数 / 已完成数"，草稿与其它岗位的项目不计。"""
+    student = await _student(client)
+    job = await _job(client, "工业视觉工程师")
+    other_job = await _job(client, "数据标注专员")
+
+    basic_done = await _project(db_session, "基础-已完成", job["id"], [])
+    await _project(db_session, "基础-未完成", job["id"], [])
+    await _project(db_session, "进阶-未完成", job["id"], [], level="ADVANCED")
+    await _project(db_session, "拓展-未完成A", job["id"], [], level="EXPANDED")
+    await _project(db_session, "拓展-未完成B", job["id"], [], level="EXPANDED")
+    await _project(db_session, "基础-草稿", job["id"], [], status="DRAFT")
+    other_done = await _project(db_session, "其它岗位-已完成", other_job["id"], [])
+
+    await _complete_project(db_session, student["id"], basic_done["id"])
+    await _complete_project(db_session, student["id"], other_done["id"])
+
+    # 选岗：把工业视觉工程师设为主岗位
+    selected = await client.post(
+        f"/api/students/{student['id']}/jobs", json={"job_id": job["id"], "is_primary": True}
+    )
+    assert selected.status_code == 201, selected.text
+
+    progress = (await client.get(JOB_PROGRESS.format(student_id=student["id"]))).json()
+    assert (progress["job_id"], progress["job_name"], progress["is_primary"]) == (
+        job["id"],
+        "工业视觉工程师",
+        True,
+    )
+    assert (progress["total"], progress["completed"]) == (5, 1)
+    assert progress["levels"] == [
+        {"level_type": "BASIC", "level_name": "基础", "total": 2, "completed": 1, "percent": 50.0},
+        {"level_type": "ADVANCED", "level_name": "进阶", "total": 1, "completed": 0, "percent": 0.0},
+        {"level_type": "EXPANDED", "level_name": "拓展", "total": 2, "completed": 0, "percent": 0.0},
+    ]
+
+    # 指定别的岗位：读的是那个岗位的项目，且不是主岗位
+    other = (
+        await client.get(JOB_PROGRESS.format(student_id=student["id"]), params={"job_id": other_job["id"]})
+    ).json()
+    assert (other["job_id"], other["is_primary"], other["total"], other["completed"]) == (
+        other_job["id"],
+        False,
+        1,
+        1,
+    )
+    assert other["levels"][0]["percent"] == 100.0
+
+    # 没选岗位的学生：返回空岗位 + 三档全 0，而不是报错
+    idle = await _student(client, user_no="2026999")
+    empty = (await client.get(JOB_PROGRESS.format(student_id=idle["id"]))).json()
+    assert (empty["job_id"], empty["is_primary"], empty["total"], empty["completed"]) == (None, False, 0, 0)
+    assert [item["total"] for item in empty["levels"]] == [0, 0, 0]
+
+    # 传了不存在的岗位：报错，不当作"没选岗位"
+    assert (await client.get(JOB_PROGRESS.format(student_id=student["id"]), params={"job_id": 999})).json()[
+        "code"
+    ] == 422
+    missing = await client.get(JOB_PROGRESS.format(student_id=999))
     assert missing.json()["code"] == 422

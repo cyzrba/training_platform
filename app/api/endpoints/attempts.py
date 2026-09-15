@@ -27,6 +27,8 @@ from app.crud.review import ReviewAiJobRepository, ReviewRecordRepository
 from app.models.attempt import FileAsset, ProjectSubmission, StudentProject
 from app.models.review import ReviewAiJob
 from app.schemas.attempt import (
+    AttemptAnswersSaveIn,
+    AttemptAnswersSaveResult,
     AttemptDetail,
     AttemptStageDetail,
     AttemptStageSaveIn,
@@ -41,6 +43,7 @@ from app.schemas.attempt import (
     StudentProjectRead,
     StudentProjectUpdate,
     StudentTrainingProject,
+    StudentTrainingProjectDetail,
     SubmissionObjectionIn,
 )
 from app.schemas.base import ApiResponse, MessageOut, Page, PageParams
@@ -49,12 +52,13 @@ from app.services import storage
 from app.services.attempt import (
     claim_for_review,
     raise_objection,
+    save_attempt_answers,
     save_stage_answer,
     start_attempt,
     submit_attempt,
     withdraw_submission,
 )
-from app.services.student_overview import student_projects
+from app.services.student_overview import student_project_detail, student_projects
 
 router = APIRouter(route_class=EnvelopeRoute, tags=["闯关评审"])
 
@@ -290,6 +294,27 @@ async def list_training_projects_of_student(student_id: int, db: DbSession, stud
 
 
 @router.get(
+    "/students/{student_id}/projects/{project_id}",
+    response_model=ApiResponse[StudentTrainingProjectDetail],
+    summary="学生在某个实训项目上的全量详情（任务简介 / 关卡与子标题 / 提交历史与评语）",
+)
+async def get_student_training_project(
+    student_id: int, project_id: int, db: DbSession, students: UserRepo
+) -> dict:
+    """项目详情页要的所有信息，一次取全。
+
+    - **任务简介** = ``training_project.description``，另附所属岗位与关联技能点；
+    - **关卡**按顺序返回，每关带模块库的名称/简介、作答要求、验收标准，以及
+      ``items_json`` 里的**子标题 + 子标题简介（prompt）**；
+    - 每关还带该学生最新一轮的填写状态、作答内容与附件数；
+    - **历史提交**按时间倒序，带提交次数、日期与每次提交上的 AI / 教师评语（含各关卡维度得分与理由）。
+    """
+    if await students.get(student_id) is None:
+        raise NotFoundError(f"学生 {student_id} 不存在")
+    return await student_project_detail(db, student_id, project_id)
+
+
+@router.get(
     "/student-projects/{record_id}",
     response_model=ApiResponse[StudentProjectDetail],
     summary="实训记录详情（含各轮闯关）",
@@ -440,6 +465,35 @@ async def save_stage(
         projects=projects,
     )
     return next(stage for stage in detail["stages"] if stage["id"] == stage_id)
+
+
+@router.put(
+    "/attempts/{attempt_id}/answers",
+    response_model=ApiResponse[AttemptAnswersSaveResult],
+    summary="保存作答（草稿，一次可存多个关卡；不改动关卡完成状态）",
+)
+async def save_answers(attempt_id: int, payload: AttemptAnswersSaveIn, db: DbSession) -> dict:
+    """学生点「保存作答」时调用：把本轮填了一半的内容存下来，下次进来接着写。
+
+    只更新 body 里带到的关卡，其余关卡不动；默认**只存文本、不改关卡完成状态**，
+    因此保存草稿不会推进关卡进度，也不会让整单提交提前放行。
+    想在同一次调用里把某关标记为完成，就在该条目上传 ``is_filled=true``。
+    """
+    record, attempt, stage_total, saved_ids = await save_attempt_answers(
+        db,
+        attempt_id=attempt_id,
+        answers=[item.model_dump() for item in payload.answers],
+    )
+    return {
+        "attempt_id": int(attempt.id),
+        "attempt_no": attempt.attempt_no,
+        "saved_count": len(saved_ids),
+        "saved_stage_ids": sorted(saved_ids),
+        "filled_stage_count": attempt.filled_stage_count,
+        "stage_total": stage_total,
+        "progress": float(record.progress),
+        "saved_at": attempt.updated_at,
+    }
 
 
 @router.post(

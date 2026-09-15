@@ -332,12 +332,41 @@ class SkillTreeProgressOverview(SQLModel):
     trees: list[SkillTreeProgress] = Field(default_factory=list, description="技能树列表（含节点进度）")
 
 
+# ------------------------------------------------------ 岗位项目分档进度视图
+
+
+class JobLevelProjectProgress(SQLModel):
+    """某一层级（基础 / 进阶 / 拓展）上岗位关联项目的总数与已完成数。"""
+
+    level_type: str = Field(description="层级 BASIC 基础 / ADVANCED 进阶 / EXPANDED 拓展")
+    level_name: str = Field(description="层级名称：基础 / 进阶 / 拓展")
+    total: int = Field(default=0, description="该层级下岗位关联的已发布项目总数")
+    completed: int = Field(default=0, description="其中该学生已完成的个数")
+    percent: float = Field(default=0, description="该层级的完成占比 0~100")
+
+
+class JobProjectProgress(SQLModel):
+    """学生所选岗位的实训项目进度：基础 / 进阶 / 拓展三档的总数与已完成数。"""
+
+    student_id: int = Field(description="学生 ID")
+    job_id: int | None = Field(default=None, description="统计的岗位 ID；没选岗位时为 null")
+    job_name: str | None = Field(default=None, description="岗位名称")
+    is_primary: bool = Field(default=False, description="该岗位是否为学生当前主岗位")
+    total: int = Field(default=0, description="三档项目总数合计")
+    completed: int = Field(default=0, description="三档已完成数合计")
+    levels: list[JobLevelProjectProgress] = Field(
+        default_factory=list, description="按基础 / 进阶 / 拓展顺序的分档进度"
+    )
+
+
 __all__ = [
     "GrowthRuleCreate",
     "GrowthRuleRead",
     "GrowthRuleUpdate",
     "JobCreate",
     "JobDetail",
+    "JobLevelProjectProgress",
+    "JobProjectProgress",
     "JobRead",
     "JobRecommendation",
     "JobSkillCreate",

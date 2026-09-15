@@ -1,10 +1,13 @@
-"""学生端的成长视图：岗位推荐、技能树进度、实训项目进度（只读派生，不落库）。
+"""学生端的成长视图：岗位推荐、技能树进度、实训项目进度与项目详情（只读派生，不落库）。
 
-三个视图分别服务三个接口：
+五个视图分别服务五个接口：
 
 - ``GET /api/students/{student_id}/job-recommendations`` —— 岗位推荐
 - ``GET /api/students/{student_id}/skill-tree-progress`` —— 技能树总览
 - ``GET /api/students/{student_id}/training-projects`` —— 实训项目列表（最高分 / 关卡进度）
+- ``GET /api/students/{student_id}/job-project-progress`` —— 所选岗位上项目的分档进度
+- ``GET /api/students/{student_id}/projects/{project_id}`` —— 单个项目的全量详情
+  （任务简介、关卡与子标题、提交历史与 AI/教师评语）
 
 统一口径（与 ``app/services/skill.py`` 一致，别再另起一套算法）：
 
@@ -23,9 +26,27 @@ from collections.abc import Iterable
 from sqlmodel import func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.models.attempt import AttemptStage, StudentProject, TrainingAttempt
-from app.models.job_skill import Job, JobSkill, ProjectSkill, SkillNode, SkillTree, StudentSkill
-from app.models.project import ProjectModule, TrainingProject
+from app.core.exceptions import NotFoundError
+from app.models.account import SysUser
+from app.models.attempt import (
+    AttemptStage,
+    AttemptStageFile,
+    ProjectSubmission,
+    StudentProject,
+    TrainingAttempt,
+)
+from app.models.enums import ENUM_INDEX, LearningLevel
+from app.models.job_skill import (
+    Job,
+    JobSkill,
+    ProjectSkill,
+    SkillNode,
+    SkillTree,
+    StudentJob,
+    StudentSkill,
+)
+from app.models.project import ProjectModule, ProjectStageTemplate, TrainingProject
+from app.models.review import ReviewRecord
 
 #: 进度达到 100 才算"已完成 / 已精通"
 MASTERED_PROGRESS = 100.0
@@ -407,9 +428,347 @@ async def student_projects(session: AsyncSession, student_id: int) -> list[dict]
     return items
 
 
+def _level_labels() -> dict[str, str]:
+    """层级文案（基础 / 进阶 / 拓展）从枚举字典取，避免在业务代码里硬编码中文。"""
+    return {item.code: item.label for item in ENUM_INDEX["learning_level"].items}
+
+
+def _ratio_percent(part: int, whole: int) -> float:
+    """完成占比 0~100（保留两位小数）；分母为 0 时返回 0。"""
+    if whole <= 0:
+        return 0.0
+    return round(part * 100 / whole, 2)
+
+
+async def _resolve_job(session: AsyncSession, student_id: int, job_id: int | None) -> tuple[Job | None, bool]:
+    """定位要统计的岗位：显式传 job_id 就用它，否则取学生当前主岗位（没有主岗位取最近选的）。
+
+    返回值第二项表示"这个岗位是不是学生当前的主岗位"。
+    """
+    if job_id is not None:
+        job = await session.get(Job, job_id)
+        if job is None:
+            raise NotFoundError(f"岗位 {job_id} 不存在")
+        selection = (
+            await session.exec(
+                select(StudentJob).where(
+                    StudentJob.student_id == student_id,
+                    StudentJob.job_id == job_id,
+                    StudentJob.is_primary.is_(True),  # type: ignore[attr-defined]
+                )
+            )
+        ).first()
+        return job, selection is not None
+
+    stmt = (
+        select(StudentJob)
+        .where(StudentJob.student_id == student_id)
+        .order_by(StudentJob.is_primary.desc(), StudentJob.id.desc())  # type: ignore[attr-defined]
+        .limit(1)
+    )
+    selection = (await session.exec(stmt)).first()
+    if selection is None:
+        return None, False
+    job = await session.get(Job, selection.job_id)
+    return job, bool(selection.is_primary)
+
+
+async def job_project_progress(session: AsyncSession, student_id: int, *, job_id: int | None = None) -> dict:
+    """学生所选岗位上的实训项目进度：按基础 / 进阶 / 拓展三档统计"总数 / 已完成数"。
+
+    - 岗位取 ``job_id`` 指定的那个；不传时取学生当前主岗位，没有主岗位则取最近选的一个；
+      一个岗位都没选时返回 ``job_id=null`` 且三档全 0，前端可据此引导去选岗；
+    - 传了不存在的 ``job_id`` 直接报"岗位不存在"，避免把笔误当成"没选岗位"；
+    - 只统计该岗位下**已发布（PUBLISHED）**且未软删的项目；
+    - 已完成 = 该学生 ``student_project.completed_at`` 有值（与技能进度的完成判定同源）。
+    """
+    job, is_primary = await _resolve_job(session, student_id, job_id)
+    labels = _level_labels()
+
+    totals: dict[str, int] = {}
+    completed: dict[str, int] = {}
+    if job is not None:
+        filters = (
+            TrainingProject.job_id == job.id,
+            TrainingProject.status == "PUBLISHED",
+            TrainingProject.deleted_at.is_(None),  # type: ignore[attr-defined]
+        )
+        total_stmt = (
+            select(TrainingProject.project_level, func.count())
+            .where(*filters)
+            .group_by(TrainingProject.project_level)
+        )
+        totals = {str(level): int(count) for level, count in (await session.exec(total_stmt)).all()}
+
+        done_stmt = (
+            select(TrainingProject.project_level, func.count())
+            .join(StudentProject, StudentProject.project_id == TrainingProject.id)  # type: ignore[arg-type]
+            .where(
+                *filters,
+                StudentProject.student_id == student_id,
+                StudentProject.completed_at.is_not(None),  # type: ignore[attr-defined]
+            )
+            .group_by(TrainingProject.project_level)
+        )
+        completed = {str(level): int(count) for level, count in (await session.exec(done_stmt)).all()}
+
+    level_items = []
+    for level in LearningLevel:
+        level_total = totals.get(level.value, 0)
+        level_done = completed.get(level.value, 0)
+        level_items.append(
+            {
+                "level_type": level.value,
+                "level_name": labels.get(level.value, level.value),
+                "total": level_total,
+                "completed": level_done,
+                "percent": _ratio_percent(level_done, level_total),
+            }
+        )
+
+    return {
+        "student_id": student_id,
+        "job_id": int(job.id) if job is not None else None,
+        "job_name": job.job_name if job is not None else None,
+        "is_primary": is_primary,
+        "total": sum(item["total"] for item in level_items),
+        "completed": sum(item["completed"] for item in level_items),
+        "levels": level_items,
+    }
+
+
+def _sub_titles(raw: object) -> list[dict]:
+    """把 ``project_module.items_json`` 归一化成 ``[{"title": ..., "prompt": ...}]``。
+
+    只保留有标题的项；``prompt`` 就是子标题的填写简介（教师填关卡时写的引导说明）。
+    """
+    if not isinstance(raw, list):
+        return []
+    items: list[dict] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        title = str(entry.get("title") or "").strip()
+        if not title:
+            continue
+        prompt = entry.get("prompt")
+        items.append({"title": title, "prompt": str(prompt).strip() if prompt else None})
+    return items
+
+
+def _float_or_none(value: object) -> float | None:
+    return float(value) if value is not None else None  # type: ignore[arg-type]
+
+
+async def _attempt_stage_state(
+    session: AsyncSession, attempt_id: int | None
+) -> tuple[dict[int, AttemptStage], dict[int, int]]:
+    """某一轮闯关的作答状态：``{项目模块 ID: 作答行}`` 与 ``{作答行 ID: 附件数}``。"""
+    if attempt_id is None:
+        return {}, {}
+    stages = list(
+        (await session.exec(select(AttemptStage).where(AttemptStage.attempt_id == attempt_id))).all()
+    )
+    stage_ids = [int(stage.id) for stage in stages]
+    file_counts: dict[int, int] = {}
+    if stage_ids:
+        file_stmt = (
+            select(AttemptStageFile.attempt_stage_id, func.count())
+            .where(AttemptStageFile.attempt_stage_id.in_(stage_ids))  # type: ignore[attr-defined]
+            .group_by(AttemptStageFile.attempt_stage_id)
+        )
+        file_counts = {int(stage_id): int(count) for stage_id, count in (await session.exec(file_stmt)).all()}
+    return {int(stage.project_module_id): stage for stage in stages}, file_counts
+
+
+async def _review_history(session: AsyncSession, submission_ids: list[int]) -> dict[int, list[dict]]:
+    """提交 → 该次提交上的评审记录（AI 与教师，按类型/版本排序）。"""
+    if not submission_ids:
+        return {}
+    stmt = (
+        select(ReviewRecord)
+        .where(ReviewRecord.submission_id.in_(submission_ids))  # type: ignore[attr-defined]
+        .order_by(ReviewRecord.submission_id, ReviewRecord.review_kind, ReviewRecord.version_no)
+    )
+    reviews = list((await session.exec(stmt)).all())
+
+    reviewer_ids = sorted({int(item.reviewer_id) for item in reviews if item.reviewer_id is not None})
+    reviewer_names: dict[int, str] = {}
+    if reviewer_ids:
+        user_stmt = select(SysUser).where(SysUser.id.in_(reviewer_ids))  # type: ignore[attr-defined]
+        reviewer_names = {int(user.id): user.real_name for user in (await session.exec(user_stmt)).all()}
+
+    grouped: dict[int, list[dict]] = {}
+    for review in reviews:
+        grouped.setdefault(int(review.submission_id), []).append(
+            {
+                "review_id": int(review.id),
+                "review_kind": review.review_kind,
+                "reviewer_id": review.reviewer_id,
+                "reviewer_name": reviewer_names.get(int(review.reviewer_id))
+                if review.reviewer_id is not None
+                else None,
+                "status": review.status,
+                "version_no": review.version_no,
+                "total_score": _float_or_none(review.total_score),
+                "conclusion": review.conclusion,
+                "comment": review.comment,
+                "dimensions": review.dimension_json,
+                "created_at": review.created_at,
+                "finished_at": review.finished_at,
+            }
+        )
+    return grouped
+
+
+async def student_project_detail(session: AsyncSession, student_id: int, project_id: int) -> dict:
+    """单个实训项目的全量详情（学生视角）。
+
+    - **任务简介**取 ``training_project.description``，另附岗位与关联技能点；
+    - **关卡**按 ``project_module.stage_no`` 排序，每关带模块库的名称/说明、作答要求与验收标准，
+      以及 ``items_json`` 里的**子标题 + 子标题简介（prompt）**；
+    - **当前状态**取该学生的实训记录与最新一轮闯关：每关是否已填写、作答内容、附件数；
+    - **历史提交**按时间倒序，带提交日期与每次提交上的 **AI / 教师评语**（含各关卡维度得分与理由）。
+    """
+    project = await session.get(TrainingProject, project_id)
+    if project is None or project.deleted_at is not None:  # type: ignore[attr-defined]
+        raise NotFoundError(f"实训项目 {project_id} 不存在")
+
+    module_stmt = (
+        select(ProjectModule).where(ProjectModule.project_id == project_id).order_by(ProjectModule.stage_no)
+    )
+    modules = list((await session.exec(module_stmt)).all())
+
+    template_map: dict[int, ProjectStageTemplate] = {}
+    if modules:
+        template_stmt = select(ProjectStageTemplate).where(
+            ProjectStageTemplate.id.in_([module.template_id for module in modules])  # type: ignore[attr-defined]
+        )
+        template_map = {int(item.id): item for item in (await session.exec(template_stmt)).all()}
+
+    record = (
+        await session.exec(
+            select(StudentProject).where(
+                StudentProject.student_id == student_id,
+                StudentProject.project_id == project_id,
+            )
+        )
+    ).first()
+
+    attempts: list[TrainingAttempt] = []
+    if record is not None:
+        attempt_stmt = (
+            select(TrainingAttempt)
+            .where(TrainingAttempt.student_project_id == record.id)  # type: ignore[arg-type]
+            .order_by(TrainingAttempt.attempt_no)
+        )
+        attempts = list((await session.exec(attempt_stmt)).all())
+    latest_attempt = attempts[-1] if attempts else None
+
+    # 当前（最新一轮）每关的作答状态、附件数 —— 这就是"本轮已保存的作答"，进来自动带回
+    stage_map, file_counts = await _attempt_stage_state(
+        session, int(latest_attempt.id) if latest_attempt is not None else None
+    )
+
+    # 历史提交（跨轮次，按提交时间倒序）与每次提交的评审记录
+    attempts_by_id = {int(attempt.id): attempt for attempt in attempts}
+    submissions: list[ProjectSubmission] = []
+    if attempts_by_id:
+        submission_stmt = (
+            select(ProjectSubmission)
+            .where(ProjectSubmission.attempt_id.in_(list(attempts_by_id)))  # type: ignore[attr-defined]
+            .order_by(ProjectSubmission.submitted_at.desc(), ProjectSubmission.id.desc())  # type: ignore[attr-defined]
+        )
+        submissions = list((await session.exec(submission_stmt)).all())
+    reviews_by_submission = await _review_history(session, [int(item.id) for item in submissions])
+
+    # 岗位与关联技能点
+    job = await session.get(Job, project.job_id) if project.job_id is not None else None
+    skills = (await _skills_of_projects(session, [project_id])).get(project_id, [])
+
+    levels = []
+    done_levels = 0
+    for module in modules:
+        module_id = int(module.id)
+        template = template_map.get(int(module.template_id))
+        stage = stage_map.get(module_id)
+        is_filled = bool(stage.is_filled) if stage is not None else False
+        if is_filled:
+            done_levels += 1
+
+        levels.append(
+            {
+                "project_module_id": module_id,
+                "attempt_stage_id": int(stage.id) if stage is not None else None,
+                "stage_no": module.stage_no,
+                "stage_key": template.stage_key if template else None,
+                "stage_name": template.stage_name if template else f"关卡 {module.stage_no}",
+                "description": template.description if template else None,
+                "requirement": module.requirement or (template.default_requirement if template else None),
+                "accept_standard": module.accept_standard
+                or (template.default_accept_standard if template else None),
+                "weight": float(module.weight),
+                "required": module.required,
+                "sub_titles": _sub_titles(module.items_json),
+                "is_filled": is_filled,
+                "filled_at": stage.filled_at if stage is not None else None,
+                # 本轮保存的作答（草稿或已填完都在这）：重新进来直接带回，接着往下写
+                "answer_text": stage.answer_text if stage is not None else None,
+                "answer_saved_at": stage.updated_at if stage is not None else None,
+                "file_count": file_counts.get(int(stage.id), 0) if stage is not None else 0,
+            }
+        )
+
+    labels = _level_labels()
+    best_score = record.best_score if record is not None else None
+    total_score = record.total_score if record is not None else None
+    return {
+        "student_id": student_id,
+        "project_id": project_id,
+        "project_name": project.project_name,
+        "project_level": project.project_level,
+        "level_name": labels.get(project.project_level, project.project_level),
+        "difficulty": project.difficulty,
+        "intro": project.description,
+        "job_id": int(project.job_id) if project.job_id is not None else None,
+        "job_name": job.job_name if job is not None else None,
+        "status": record.status if record is not None else "NOT_STARTED",
+        "best_score": _float_or_none(best_score),
+        "total_score": _float_or_none(total_score),
+        "progress": float(record.progress) if record is not None else 0.0,
+        "level_total": len(modules),
+        "level_done": done_levels,
+        "attempt_count": len(attempts),
+        # 前端拿 current_attempt_id 去调保存作答接口（PUT /api/attempts/{id}/answers）
+        "current_attempt_id": int(latest_attempt.id) if latest_attempt is not None else None,
+        "current_attempt_no": latest_attempt.attempt_no if latest_attempt is not None else None,
+        "submission_count": len(submissions),
+        "skill_nodes": skills,
+        "levels": levels,
+        "submissions": [
+            {
+                "submission_id": int(item.id),
+                "attempt_no": attempts_by_id[int(item.attempt_id)].attempt_no,
+                "submit_no": item.submit_no,
+                "status": item.status,
+                "final_conclusion": item.final_conclusion,
+                "total_score": _float_or_none(item.total_score),
+                "submitted_at": item.submitted_at,
+                "reviewed_at": item.reviewed_at,
+                "objection_reason": item.objection_reason,
+                "is_starred": item.is_starred,
+                "reviews": reviews_by_submission.get(int(item.id), []),
+            }
+            for item in submissions
+        ],
+    }
+
+
 __all__ = [
     "MASTERED_PROGRESS",
+    "job_project_progress",
     "recommend_jobs",
     "skill_tree_progress",
+    "student_project_detail",
     "student_projects",
 ]

@@ -156,20 +156,24 @@ curl -N -X POST http://127.0.0.1:8000/api/qa/sessions/1/ask \
 - **token 只统计不限制**：`prompt_tokens` / `completion_tokens` 在回答结束回填，
   `GET /api/qa/usage` 汇总；兼容端点不返回 usage 时按字符估算（`estimated=true`）。
 
-### 学生成长视图（岗位推荐 / 技能树 / 实训项目）
+### 学生成长视图（岗位推荐 / 技能树 / 实训项目 / 岗位项目进度 / 项目详情）
 
-三个只读派生接口，全部按学生维度返回，口径统一收在 `app/services/student_overview.py`：
+五个只读派生接口，全部按学生维度返回，口径统一收在 `app/services/student_overview.py`：
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/api/students/{student_id}/job-recommendations` | 岗位推荐，默认前三名（`limit` 可调），按技能匹配度倒序 |
 | GET | `/api/students/{student_id}/skill-tree-progress` | 全部技能树与技能点 + 单树进度、整体进度、技能点统计 |
 | GET | `/api/students/{student_id}/training-projects` | 已发布实训项目 + 最高分、关卡进度（总/完成）、所属岗位、关联技能点、项目状态 |
+| GET | `/api/students/{student_id}/job-project-progress` | 所选岗位上实训项目的分档进度：基础 / 进阶 / 拓展各多少关，各完成多少（`job_id` 可指定岗位） |
+| GET | `/api/students/{student_id}/projects/{project_id}` | 项目详情：任务简介 + 关卡（含每个子标题的简介）+ 本轮已保存的作答 + 历史提交次数/日期与 AI、教师评语 |
 
 ```bash
 curl http://127.0.0.1:8000/api/students/1/job-recommendations
 curl http://127.0.0.1:8000/api/students/1/skill-tree-progress
 curl http://127.0.0.1:8000/api/students/1/training-projects
+curl http://127.0.0.1:8000/api/students/1/job-project-progress
+curl http://127.0.0.1:8000/api/students/1/projects/1
 ```
 
 口径：技能点进度取 `student_skill.progress`（"完成项目数 ÷ 关联项目总数"×100，手工调整记
@@ -177,7 +181,33 @@ MANUAL）；岗位匹配度、技能树进度、整体进度都是**相关技能
 `training_project.job_id` 指向该岗位且已发布（PUBLISHED）的项目；关卡进度 =
 `project_module` 的关卡数与最新一轮闯关 `attempt_stage.is_filled` 的个数（重新挑战从 0 重新计，
 最高分保留）。没关联技能的岗位不参与推荐；学生没开始过的项目也会在实训项目列表里返回
-（`status=NOT_STARTED`、成绩 null、进度 0/关卡总数）。
+（`status=NOT_STARTED`、成绩 null、进度 0/关卡总数）。岗位项目进度不传 `job_id` 时取学生当前
+主岗位（没有主岗位取最近选的），一个岗位都没选就返回 `job_id=null` + 三档全 0。
+
+项目详情里的关卡子标题取自 `project_module.items_json`（**由教师在项目里手填，模块库不预设**），
+每项是 `{"title": "检测对象描述", "prompt": "工件名称、材质、尺寸范围"}`：`prompt` 就是子标题的
+填写简介，学生端在子标题下直接展示。案例项目（`scripts/seed_case_project.py`）的七个关卡、
+34 个子标题已经全部写好简介；演示项目见 `app/db/seed_demo.py` 的 `PROJECT_MODULE_ITEMS`。
+
+项目详情里每关的 `answer_text` 就是**本轮已保存的作答**（草稿也算），`current_attempt_id` +
+每关的 `attempt_stage_id` 用来调下面的保存接口；重新进来时直接把这批内容填回作答框即可接着写。
+
+### 学生保存作答（草稿保存）
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| PUT | `/api/attempts/{attempt_id}/answers` | 一次保存本轮多个关卡的作答；默认只存文本、不改关卡完成状态 |
+
+```bash
+curl -X PUT http://127.0.0.1:8000/api/attempts/12/answers \
+  -H 'Content-Type: application/json' \
+  -d '{"answers":[{"attempt_stage_id":101,"answer_text":"第二轮写了一半的需求分析"}]}'
+```
+
+口径：只更新 body 里带到的关卡，其余不动；不传 `is_filled` 时**只存草稿**——关卡不会变成已完成、
+进度不会推进、整单提交也不会提前放行；想在同一次调用里把关卡标记完成就传 `is_filled=true`。
+返回 `saved_count` / `filled_stage_count` / `progress` / `saved_at`。本轮已提交或已完成后不能再改
+（返回 422），不属于本轮的关卡 ID 同样报错。
 
 ## 目录结构
 

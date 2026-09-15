@@ -6,6 +6,7 @@
 - project_submission：PENDING_AI → AI_PASSED / AI_FAILED →（教师复审）REVIEWED / WITHDRAWN
 """
 
+from collections.abc import Sequence
 from decimal import ROUND_HALF_UP, Decimal
 
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -174,6 +175,58 @@ async def save_stage_answer(
         raise BusinessRuleError("实训记录缺失")
     await records.update(record, {"progress": _percent(filled, total)})
     return record, attempt
+
+
+async def save_attempt_answers(
+    session: AsyncSession,
+    *,
+    attempt_id: int,
+    answers: Sequence[dict[str, object]],
+) -> tuple[StudentProject, TrainingAttempt, int, list[int]]:
+    """一次保存本轮多个关卡的作答（"保存作答"按钮用的草稿保存）。
+
+    与"关卡提交"的区别：默认**只写作答文本，不动 ``is_filled``**，
+    所以保存过一半内容不会让关卡变成已完成、也不会推进关卡进度；
+    显式传 ``is_filled`` 时才改填写状态（前端想让保存同时标记完成时用）。
+
+    返回 ``(实训记录, 轮次, 本轮关卡总数, 本次保存的作答行 ID)``；本轮已提交/已完成时拒绝再写。
+    """
+    attempts = TrainingAttemptRepository(session)
+    stages = AttemptStageRepository(session)
+    records = StudentProjectRepository(session)
+
+    attempt = await attempts.get(attempt_id)
+    if attempt is None:
+        raise BusinessRuleError(f"闯关轮次 {attempt_id} 不存在")
+    if attempt.status != "IN_PROGRESS":
+        raise ConflictError("本轮已提交或已完成，不能再修改作答")
+
+    existing = {int(stage.id): stage for stage in await stages.list_of_attempt(attempt_id)}
+    saved_ids: list[int] = []
+    for item in answers:
+        stage_id = int(item["attempt_stage_id"])  # type: ignore[arg-type]
+        stage = existing.get(stage_id)
+        if stage is None:
+            raise BusinessRuleError(f"关卡作答 {stage_id} 不属于本轮闯关")
+
+        data: dict[str, object] = {"answer_text": item.get("answer_text")}
+        if item.get("is_filled") is not None:
+            filled = bool(item["is_filled"])
+            data["is_filled"] = filled
+            data["filled_at"] = now() if filled else None
+        await stages.update(stage, data)
+        saved_ids.append(stage_id)
+
+    # 作答行变了就重算一次进度（没动 is_filled 时结果不变，统一算更省心）
+    filled_count = await stages.count_filled(attempt_id)
+    total = len(existing)
+    await attempts.update(attempt, {"filled_stage_count": filled_count})
+
+    record = await records.get(attempt.student_project_id)
+    if record is None:  # 外键保证不会发生
+        raise BusinessRuleError("实训记录缺失")
+    await records.update(record, {"progress": _percent(filled_count, total)})
+    return record, attempt, total, saved_ids
 
 
 async def submit_attempt(session: AsyncSession, *, attempt_id: int) -> ProjectSubmission:
@@ -418,6 +471,7 @@ __all__ = [
     "pass_score_of_project",
     "raise_objection",
     "resolve_conclusion",
+    "save_attempt_answers",
     "save_stage_answer",
     "start_attempt",
     "submit_attempt",
