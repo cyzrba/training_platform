@@ -14,8 +14,10 @@ from app.api.endpoints import (
     knowledge,
     organization,
     projects,
+    publish,
     qa,
     reviews,
+    teacher,
 )
 
 #: 全部业务域路由
@@ -26,6 +28,8 @@ API_ROUTERS: tuple[APIRouter, ...] = (
     organization.router,
     job_skill.router,
     projects.router,
+    publish.router,
+    teacher.router,
     knowledge.router,
     qa.router,
     attempts.router,

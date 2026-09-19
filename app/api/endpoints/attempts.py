@@ -1,4 +1,4 @@
-"""闯关过程接口：学生实训记录、闯关轮次、模块作答、整单提交、AI 评审任务。
+"""闯关过程接口：学生实训记录、我的实训清单、闯关轮次、模块作答、整单提交、AI 评审任务。
 
 学生流程：开始闯关（自动建记录 + 轮次 + 各关卡作答行）→ 逐关填写 → 整单提交 →
 （AI 任务排队）→ 等待评审；教师侧在 /api/reviews 里评审定稿。
@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile,
 from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import DbSession, PageDep
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import BusinessRuleError, ConflictError, NotFoundError
 from app.core.response import EnvelopeRoute
 from app.crud.account import UserRepository
 from app.crud.attempt import (
@@ -19,10 +19,12 @@ from app.crud.attempt import (
     AttemptStageRepository,
     FileAssetRepository,
     ProjectSubmissionRepository,
+    StudentProjectPickRepository,
     StudentProjectRepository,
     TrainingAttemptRepository,
 )
 from app.crud.project import ProjectModuleRepository, StageTemplateRepository, TrainingProjectRepository
+from app.crud.publish import PublishTaskRepository
 from app.crud.review import ReviewAiJobRepository, ReviewRecordRepository
 from app.models.attempt import FileAsset, ProjectSubmission, StudentProject
 from app.models.review import ReviewAiJob
@@ -40,6 +42,8 @@ from app.schemas.attempt import (
     ProjectSubmissionRead,
     ProjectSubmissionUpdate,
     StudentProjectDetail,
+    StudentProjectPickIn,
+    StudentProjectPickOrderIn,
     StudentProjectRead,
     StudentProjectUpdate,
     StudentTrainingProject,
@@ -48,6 +52,7 @@ from app.schemas.attempt import (
 )
 from app.schemas.base import ApiResponse, MessageOut, Page, PageParams
 from app.schemas.review import ReviewAiJobCreate, ReviewAiJobRead, ReviewAiJobUpdate
+from app.services import publish as publish_service
 from app.services import storage
 from app.services.attempt import (
     claim_for_review,
@@ -58,7 +63,7 @@ from app.services.attempt import (
     submit_attempt,
     withdraw_submission,
 )
-from app.services.student_overview import student_project_detail, student_projects
+from app.services.student_overview import my_projects, student_project_detail, student_projects
 
 router = APIRouter(route_class=EnvelopeRoute, tags=["闯关评审"])
 
@@ -68,6 +73,10 @@ router = APIRouter(route_class=EnvelopeRoute, tags=["闯关评审"])
 
 def student_project_repo(db: DbSession) -> StudentProjectRepository:
     return StudentProjectRepository(db)
+
+
+def project_pick_repo(db: DbSession) -> StudentProjectPickRepository:
+    return StudentProjectPickRepository(db)
 
 
 def attempt_repo(db: DbSession) -> TrainingAttemptRepository:
@@ -115,6 +124,7 @@ def user_repo(db: DbSession) -> UserRepository:
 
 
 StudentProjectRepo = Annotated[StudentProjectRepository, Depends(student_project_repo)]
+ProjectPickRepo = Annotated[StudentProjectPickRepository, Depends(project_pick_repo)]
 AttemptRepo = Annotated[TrainingAttemptRepository, Depends(attempt_repo)]
 AttemptStageRepo = Annotated[AttemptStageRepository, Depends(attempt_stage_repo)]
 StageFileRepo = Annotated[AttemptStageFileRepository, Depends(stage_file_repo)]
@@ -185,7 +195,6 @@ async def _attempt_detail(
             {
                 **stage.model_dump(),
                 "stage_no": module.stage_no if module else 0,
-                "stage_key": template.stage_key if template else None,
                 "stage_name": template.stage_name if template else None,
                 "required": module.required if module else True,
                 "weight": module.weight if module else 0,
@@ -226,6 +235,8 @@ async def start_student_project(
 ) -> dict:
     if await students.get(student_id) is None:
         raise NotFoundError(f"学生 {student_id} 不存在")
+    # 项目发布后对所有学生开放，不等任务（任务 = 必修标记，口径见 docs/方案设计.md §4.2）
+    await publish_service.ensure_project_published(db, project_id)
     _, attempt = await start_attempt(db, student_id=student_id, project_id=project_id)
     return await _attempt_detail(
         attempt,
@@ -291,6 +302,114 @@ async def list_training_projects_of_student(student_id: int, db: DbSession, stud
     if await students.get(student_id) is None:
         raise NotFoundError(f"学生 {student_id} 不存在")
     return await student_projects(db, student_id)
+
+
+# --------------------------------------------------------------- 我的实训
+
+
+async def _published_project_or_422(projects: TrainingProjectRepository, project_id: int) -> None:
+    """只能把自己看得到（已发布）的项目加进「我的实训」。"""
+    project = await projects.get(project_id)
+    if project is None:
+        raise NotFoundError(f"实训项目 {project_id} 不存在")
+    if project.status != "PUBLISHED":
+        raise BusinessRuleError(f"《{project.project_name}》还没发布，不能加入我的实训")
+
+
+@router.get(
+    "/students/{student_id}/my-projects",
+    response_model=ApiResponse[list[StudentTrainingProject]],
+    summary="我的实训（自己挑的 + 老师点名必修的项目）",
+)
+async def list_my_projects(student_id: int, db: DbSession, students: UserRepo) -> list[dict]:
+    """「我的实训」清单 = 学生自己挑的 ∪ 老师发任务点名必修的（都是已发布项目）。
+
+    每条带 ``picked``（是否自己加的）、``is_required``（是否老师点名）与组合标签 ``sources``
+    （``SELF`` / ``TEACHER``，一个项目可能两者都是）。排序：必修置顶 → 学生自定义顺序 →
+    加入时间新的在前。项目下架后不再出现（记录保留，重新上架自动回来）。
+    """
+    if await students.get(student_id) is None:
+        raise NotFoundError(f"学生 {student_id} 不存在")
+    return await my_projects(db, student_id)
+
+
+@router.post(
+    "/students/{student_id}/my-projects",
+    response_model=ApiResponse[list[StudentTrainingProject]],
+    summary="把项目加入我的实训（批量、幂等）",
+)
+async def add_my_projects(
+    student_id: int,
+    payload: StudentProjectPickIn,
+    response: Response,
+    db: DbSession,
+    students: UserRepo,
+    projects: TrainingProjectRepo,
+    picks: ProjectPickRepo,
+) -> list[dict]:
+    """批量把自己挑的项目加进「我的实训」；已经加过的跳过（幂等）。
+
+    全部都是新加时返回 **201**，一条都没新增（全重复）时返回 **200**。
+    项目不存在 → 404；项目还没发布 → 422（学生本来也看不到它）。
+    """
+    if await students.get(student_id) is None:
+        raise NotFoundError(f"学生 {student_id} 不存在")
+    project_ids = list(dict.fromkeys(int(pid) for pid in payload.project_ids))
+    for project_id in project_ids:
+        await _published_project_or_422(projects, project_id)
+    created = await picks.add_projects(student_id, project_ids)
+    response.status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+    return await my_projects(db, student_id)
+
+
+@router.patch(
+    "/students/{student_id}/my-projects/order",
+    response_model=ApiResponse[list[StudentTrainingProject]],
+    summary="调整我的实训里自己挑的项目的顺序（覆盖式）",
+)
+async def reorder_my_projects(
+    student_id: int,
+    payload: StudentProjectPickOrderIn,
+    db: DbSession,
+    students: UserRepo,
+    picks: ProjectPickRepo,
+) -> list[dict]:
+    """按传入顺序写 ``sort_no``（1..N，覆盖式）。
+
+    只对"学生自己加入的项目"生效：老师点名必修、但他没自己加过的项目不在清单表里，
+    排序接口会返回 422 让他先加进来（这类项目本来就一直置顶）。
+    """
+    if await students.get(student_id) is None:
+        raise NotFoundError(f"学生 {student_id} 不存在")
+    missing = await picks.reorder(student_id, payload.project_ids)
+    if missing:
+        raise BusinessRuleError(f"这些项目不在你的「我的实训」里，加进来再排序：{missing}")
+    return await my_projects(db, student_id)
+
+
+@router.delete(
+    "/students/{student_id}/my-projects/{project_id}",
+    response_model=ApiResponse[MessageOut],
+    summary="把项目移出我的实训（幂等）",
+)
+async def remove_my_project(
+    student_id: int,
+    project_id: int,
+    db: DbSession,
+    students: UserRepo,
+    picks: ProjectPickRepo,
+) -> MessageOut:
+    """移出「我的实训」；本来就不在清单里也算成功（幂等）。
+
+    老师点名的必修项目移出后仍会出现在列表里（必修是任务实时算的），返回消息会说明这一点。
+    闯关记录、成绩、技能进度都不受影响。
+    """
+    if await students.get(student_id) is None:
+        raise NotFoundError(f"学生 {student_id} 不存在")
+    await picks.remove_project(student_id, project_id)
+    if project_id in await PublishTaskRepository(db).visible_project_ids_of_student(student_id):
+        return MessageOut(message="已从我的实训移除；该项目是老师点名的必修，仍会出现在列表里")
+    return MessageOut(message="已从我的实训移除")
 
 
 @router.get(

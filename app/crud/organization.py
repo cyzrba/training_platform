@@ -40,6 +40,15 @@ class ClassRepository(BaseRepository[ClassInfo]):
             filters.append(ClassInfo.head_teacher_id == head_teacher_id)
         return await self.list_page(params, *filters)
 
+    async def list_of_teacher(self, teacher_id: int) -> list[ClassInfo]:
+        """某位教师任教的班级（按负责教师字段取，归档班也返回，由调用方决定是否过滤）。"""
+        stmt = (
+            select(ClassInfo)
+            .where(ClassInfo.head_teacher_id == teacher_id, ClassInfo.deleted_at.is_(None))  # type: ignore[attr-defined]
+            .order_by(ClassInfo.id)
+        )
+        return list((await self.session.exec(stmt)).all())
+
 
 class ClassGroupRepository(BaseRepository[ClassGroup]):
     """班级分组仓储。"""
@@ -67,6 +76,34 @@ class ClassStudentRepository(BaseRepository[ClassStudent]):
     """在班学生仓储（含转出历史）。"""
 
     model = ClassStudent
+
+    async def roster(self, class_id: int, *, status: str = "ENROLLED") -> list[dict[str, Any]]:
+        """班级花名册（不分页）：一条 = 一个在班学生 + 他的当前分组。
+
+        教师工作台要一次拿到整班的"学生 × 分组"关系，分页反而碍事（一个班几十人）。
+        """
+        stmt = (
+            select(ClassStudent, SysUser, ClassStudentGroup, ClassGroup)
+            .select_from(ClassStudent)
+            .join(SysUser, SysUser.id == ClassStudent.student_id)  # type: ignore[arg-type]
+            .outerjoin(ClassStudentGroup, ClassStudentGroup.class_student_id == ClassStudent.id)  # type: ignore[arg-type]
+            .outerjoin(ClassGroup, ClassGroup.id == ClassStudentGroup.group_id)  # type: ignore[arg-type]
+            .where(ClassStudent.class_id == class_id, ClassStudent.status == status)
+            .order_by(ClassStudent.id)
+        )
+        return [
+            {
+                "class_student_id": int(enrollment.id),
+                "student_id": int(student.id),
+                "user_no": student.user_no,
+                "real_name": student.real_name,
+                "major_name": student.major_name,
+                "account_status": student.status,
+                "group_id": int(group.id) if group else None,
+                "group_name": group.group_name if group else None,
+            }
+            for enrollment, student, _membership, group in (await self.session.exec(stmt)).all()
+        ]
 
     async def active_enrollment(self, class_id: int, student_id: int) -> ClassStudent | None:
         """该学生在班级里的在读记录（唯一约束 uk_class_student_active 保证至多一条）。"""

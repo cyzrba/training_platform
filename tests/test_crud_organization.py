@@ -33,12 +33,17 @@ async def _create_class(client: httpx.AsyncClient, name: str = "人工智能2401
 
 
 async def _import(
-    client: httpx.AsyncClient, class_id: int, content: bytes, *, dry_run: bool = False
+    client: httpx.AsyncClient,
+    class_id: int,
+    content: bytes,
+    *,
+    dry_run: bool = False,
+    reuse_existing: bool = False,
 ) -> httpx.Response:
     return await client.post(
         f"{CLASSES}/{class_id}/students/import",
         files={"file": ("students.xlsx", content, XLSX_MIME)},
-        data={"dry_run": str(dry_run).lower()},
+        data={"dry_run": str(dry_run).lower(), "reuse_existing": str(reuse_existing).lower()},
     )
 
 
@@ -390,6 +395,48 @@ async def test_import_rejects_existing_user_and_bad_rows(client: httpx.AsyncClie
     broken = await _import(client, classroom["id"], b"not-an-excel-file")
     assert broken.status_code == 200
     assert "无法解析 Excel" in broken.json()["msg"]
+
+
+@pytest.mark.asyncio
+async def test_import_reuse_existing_users_into_new_class(client: httpx.AsyncClient) -> None:
+    """换老师 / 转班场景：reuse_existing=true 时，已存在的学号复用账号并加入新班。"""
+    old_class = await _create_class(client, "老班")
+    new_class = await _create_class(client, "新班")
+    content = _xlsx([["2026081", "老班学生", "人工智能技术应用", "", ""]])
+
+    first = await _import(client, old_class["id"], content)
+    assert first.status_code == 200 and first.json()["created_users"] == 1
+
+    # 默认行为不变：已存在的学号仍然整批拒绝
+    rejected = await _import(client, new_class["id"], content)
+    assert rejected.status_code == 200
+    assert "已存在" in rejected.json()["data"][0]["reason"]
+    assert (await client.get(f"{CLASSES}/{new_class['id']}/students")).json()["total"] == 0
+
+    # 显式复用：账号不新建，只是多一条新班的在班记录
+    reused = await _import(client, new_class["id"], content, reuse_existing=True)
+    assert reused.status_code == 200, reused.text
+    payload = reused.json()
+    assert (payload["created_users"], payload["reused_users"]) == (0, 1)
+    assert payload["created_class_students"] == 1
+
+    roster = (await client.get(f"{CLASSES}/{new_class['id']}/students")).json()
+    assert [(item["user_no"], item["real_name"]) for item in roster["items"]] == [("2026081", "老班学生")]
+    # 同一个学生账号，在两个班里各有一条在班记录
+    assert (
+        roster["items"][0]["student_id"]
+        == (await client.get(f"{CLASSES}/{old_class['id']}/students")).json()["items"][0]["student_id"]
+    )
+
+    # 文件内重复学号仍然是错误（防止名单里混进重复行）
+    duplicated = await _import(
+        client,
+        new_class["id"],
+        _xlsx([["2026082", "甲", "", "", ""], ["2026082", "乙", "", "", ""]]),
+        reuse_existing=True,
+    )
+    assert duplicated.status_code == 200
+    assert "重复" in duplicated.json()["data"][0]["reason"]
 
 
 @pytest.mark.asyncio

@@ -50,6 +50,7 @@ from app.schemas.project import (
     TrainingProjectUpdate,
 )
 from app.services import knowledge_ingest, storage
+from app.services import skill as skill_service
 from app.services.project import (
     build_module_details,
     ensure_publishable,
@@ -133,7 +134,7 @@ async def _project_detail(
     files: ProjectFileRepository,
     assets: FileAssetRepository,
 ) -> dict:
-    """项目详情：带模块组成（关卡名/编码取模块库）、权重合计与附件清单。"""
+    """项目详情：带模块组成（关卡名取模块库）、权重合计与附件清单。"""
     items = await modules.list_of_project(project.id)
     return {
         **project.model_dump(),
@@ -225,7 +226,7 @@ async def _ingest_scoring_criteria(session: DbSession, *, asset: FileAsset, link
 async def list_stage_templates(
     templates: StageTemplateRepo,
     page: PageDep,
-    keyword: Annotated[str | None, Query(description="模块名称或编码模糊搜索")] = None,
+    keyword: Annotated[str | None, Query(description="模块名称模糊搜索")] = None,
 ) -> Page[object]:
     return await templates.list_templates(page, keyword=keyword)
 
@@ -239,21 +240,21 @@ async def list_stage_templates(
 async def create_stage_template(
     payload: ProjectStageTemplateCreate, templates: StageTemplateRepo, response: Response
 ) -> ProjectStageTemplate:
-    if await templates.by_key(payload.stage_key) is not None:
-        raise ConflictError(f"模块编码 {payload.stage_key} 已存在")
+    if await templates.by_name(payload.stage_name) is not None:
+        raise ConflictError(f"模块 {payload.stage_name} 已存在")
     data = payload.model_dump()
     if not data.get("sort_no"):
         data["sort_no"] = await templates.next_sort_no()
 
-    # 之前软删过的同名编码：直接恢复并覆盖内容，避免"删掉了就再也建不了同名关卡"
-    removed = await templates.by_key_including_deleted(payload.stage_key)
+    # 之前软删过的同名模块：直接恢复并覆盖内容，避免"删掉了就再也建不了同名关卡"
+    removed = await templates.by_name_including_deleted(payload.stage_name)
     if removed is not None:
         response.status_code = status.HTTP_200_OK
         return await templates.restore(removed, data)
     try:
         return await templates.create(data)
     except IntegrityError as exc:
-        raise ConflictError(f"模块编码 {payload.stage_key} 已存在") from exc
+        raise ConflictError(f"模块 {payload.stage_name} 已存在") from exc
 
 
 @router.get(
@@ -281,13 +282,13 @@ async def update_stage_template(
 ) -> ProjectStageTemplate:
     template = await _template_or_404(templates, template_id)
     data = payload.model_dump(exclude_unset=True)
-    new_key = data.get("stage_key")
-    if new_key and new_key != template.stage_key and await templates.by_key(new_key) is not None:
-        raise ConflictError(f"模块编码 {new_key} 已存在")
+    new_name = data.get("stage_name")
+    if new_name and new_name != template.stage_name and await templates.by_name(new_name) is not None:
+        raise ConflictError(f"模块 {new_name} 已存在")
     try:
         return await templates.update(template, data)
     except IntegrityError as exc:
-        raise ConflictError(f"模块编码 {new_key} 已存在") from exc
+        raise ConflictError(f"模块 {new_name} 已存在") from exc
 
 
 @router.delete(
@@ -367,16 +368,26 @@ async def get_project(
     summary="更新项目（改成 PUBLISHED 会校验关卡与权重）",
 )
 async def update_project(
-    project_id: int, payload: TrainingProjectUpdate, projects: TrainingProjectRepo, modules: ProjectModuleRepo
+    project_id: int,
+    payload: TrainingProjectUpdate,
+    db: DbSession,
+    projects: TrainingProjectRepo,
+    modules: ProjectModuleRepo,
 ) -> TrainingProject:
     project = await _project_or_404(projects, project_id)
     data = payload.model_dump(exclude_unset=True)
     new_name = data.get("project_name")
     if new_name and new_name != project.project_name and await projects.by_name(new_name) is not None:
         raise ConflictError(f"项目 {new_name} 已存在")
-    if data.get("status") == "PUBLISHED" and project.status != "PUBLISHED":
+    old_status = project.status
+    new_status = data.get("status")
+    if new_status == "PUBLISHED" and old_status != "PUBLISHED":
         await ensure_publishable(project_id, modules)
-    return await projects.update(project, data)
+    updated = await projects.update(project, data)
+    # 上架 / 下架都会改变学生技能进度的分母（分母 = 全部已发布项目），要重算已有记录的学生
+    if new_status is not None and new_status != old_status:
+        await skill_service.sync_skills_after_projects_changed(db, [project_id])
+    return updated
 
 
 @router.delete(
@@ -744,15 +755,18 @@ async def list_project_skills(
 async def set_project_skills(
     project_id: int,
     payload: JobSkillSetIn,
+    db: DbSession,
     projects: TrainingProjectRepo,
     nodes: SkillNodeRepo,
     project_skills: ProjectSkillRepo,
 ) -> list[SkillNode]:
-    await _project_or_404(projects, project_id)
+    project = await _project_or_404(projects, project_id)
     for node_id in dict.fromkeys(payload.skill_node_ids):
         if await nodes.get(node_id) is None:
             raise BusinessRuleError(f"技能节点 {node_id} 不存在")
     await project_skills.replace_skills(project_id, payload.skill_node_ids)
+    if project.status == "PUBLISHED":
+        await skill_service.sync_skills_after_projects_changed(db, [project_id])
     return await project_skills.list_nodes_of_project(project_id)
 
 
@@ -765,17 +779,20 @@ async def set_project_skills(
 async def add_project_skill(
     project_id: int,
     skill_node_id: int,
+    db: DbSession,
     projects: TrainingProjectRepo,
     nodes: SkillNodeRepo,
     project_skills: ProjectSkillRepo,
 ) -> MessageOut:
-    await _project_or_404(projects, project_id)
+    project = await _project_or_404(projects, project_id)
     node = await nodes.get(skill_node_id)
     if node is None:
         raise NotFoundError(f"技能节点 {skill_node_id} 不存在")
     if await project_skills.link_exists(project_id, skill_node_id):
         raise ConflictError(f"项目已关联技能「{node.node_name}」")
     await project_skills.add_skill(project_id, skill_node_id)
+    if project.status == "PUBLISHED":
+        await skill_service.sync_skills_after_projects_changed(db, [project_id])
     return MessageOut(message="技能已关联")
 
 
@@ -787,11 +804,14 @@ async def add_project_skill(
 async def remove_project_skill(
     project_id: int,
     skill_node_id: int,
+    db: DbSession,
     projects: TrainingProjectRepo,
     project_skills: ProjectSkillRepo,
 ) -> MessageOut:
-    await _project_or_404(projects, project_id)
+    project = await _project_or_404(projects, project_id)
     await project_skills.remove_skill(project_id, skill_node_id)
+    if project.status == "PUBLISHED":
+        await skill_service.sync_skills_after_projects_changed(db, [project_id])
     return MessageOut(message="技能已解除")
 
 

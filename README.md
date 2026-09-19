@@ -93,6 +93,8 @@ uv run python scripts/check_schema_parity.py             # ORM 与 DDL 草稿比
 uv run python scripts/reindex_knowledge.py --pending      # 重建/补齐 Milvus 索引
 uv run python scripts/set_llm_config.py --show           # 看主模型配置（api key 打码）
 uv run python scripts/prune_qa_history.py --dry-run      # 看会清理掉哪些过期问答会话
+uv run python scripts/dispatch_publish_tasks.py --dry-run # 看有哪些定时任务到了要发布的点
+uv run python scripts/dispatch_publish_tasks.py          # 发布到点的定时任务（挂 cron，每分钟一次）
 uv run python scripts/prune_qa_history.py                # 清理保留期外的问答历史（挂 cron 用）
 ```
 
@@ -156,6 +158,69 @@ curl -N -X POST http://127.0.0.1:8000/api/qa/sessions/1/ask \
 - **token 只统计不限制**：`prompt_tokens` / `completion_tokens` 在回答结束回填，
   `GET /api/qa/usage` 汇总；兼容端点不返回 usage 时按字符估算（`estimated=true`）。
 
+### 任务下发（发布任务）
+
+**实训项目管理里的"发布"只代表项目已经编辑好、存在平台里**（`training_project.status =
+'PUBLISHED'`），学生看不到；教师还要**发布任务**，项目才会出现在目标学生的列表里。草稿
+（DRAFT）/ 已下架（OFF_SHELF）的项目不能发布任务。
+
+一条任务由三块组成：
+
+| 要素 | 字段 | 默认值 |
+| --- | --- | --- |
+| 发给谁 | `targets`：班级 + 可选分组（`target_type=CLASS/GROUP`） | 班级必选；不选分组 = 全班 |
+| 发什么 | `job_ids`（岗位范围）+ `project_level`（层级）+ `project_ids`（可手工指定） | 岗位留空 = 全部岗位；项目留空 = 按「岗位 × 层级」自动挑已发布项目 |
+| 什么时候发 | `publish_mode` + `scheduled_at` | `IMMEDIATE` 创建即生效；`SCHEDULED` 到点生效 |
+
+> **岗位范围只用于筛项目**（`training_project.job_id ∈ job_ids`），不筛学生：学生只要在目标
+> 班级 / 分组里，这批量项目对他就带上"必修"标记，跟他自己选了什么岗位无关。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/publish-tasks` | 任务列表（`status` / `project_level` / `creator_id` / 关键词 + 分页） |
+| POST | `/api/publish-tasks` | 创建并下发（即时 / 定时） |
+| GET | `/api/publish-tasks/{id}` | 详情：目标班级 / 分组、岗位范围、项目快照、覆盖学生数 |
+| PATCH | `/api/publish-tasks/{id}` | 未发布可全量改；已发布只允许改说明 / 截止时间 / 备注 |
+| POST | `/api/publish-tasks/{id}/publish` | 立即发布（定时任务也可以提前发） |
+| POST | `/api/publish-tasks/{id}/cancel` | 撤回（不再算必修；项目本身照旧开放，闯关记录保留） |
+| DELETE | `/api/publish-tasks/{id}` | 软删（仅限从没发布过的任务） |
+| POST | `/api/publish-tasks/preview-students` | 选完班级 / 分组后预览覆盖学生数 |
+| GET | `/api/publish-tasks/publishable-projects` | 可发布项目（只返回 PUBLISHED，按岗位 × 层级筛） |
+| GET | `/api/students/{student_id}/tasks` | 学生端「我的任务」 |
+
+```bash
+# 即时发布：把「工业缺陷检测实训」发给 1 班全班，7 天后截止
+curl -X POST http://127.0.0.1:8000/api/publish-tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"第 3 周 · 基础实训","project_level":"BASIC",
+       "targets":[{"class_id":1,"target_type":"CLASS"}],
+       "publish_mode":"IMMEDIATE","deadline_at":"2026-09-22T23:59:59"}'
+
+# 定时发布：到点才生效
+curl -X POST http://127.0.0.1:8000/api/publish-tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"下周开课","job_ids":[1],"project_ids":[1],
+       "targets":[{"class_id":1,"target_type":"GROUP","group_id":2}],
+       "publish_mode":"SCHEDULED","scheduled_at":"2026-09-22T08:00:00"}'
+```
+
+定时发布靠宿主 cron 驱动（**脚本没跑 = 任务不生效**，不做"读的时候顺便判定"的双口径）：
+
+```cron
+* * * * * cd /path/to/training_platform && .venv/bin/python scripts/dispatch_publish_tasks.py >> data/run/publish.log 2>&1
+```
+
+任务口径：**任务 = 必修**。一条 `status='PUBLISHED'` 的任务覆盖到某个学生（班级命中，或分组
+命中）后，任务里的项目对这个学生就是"老师点名要求完成"的必修项（学生端项目列表 `is_required=true`
+并带 `required_task_titles` / `required_deadline_at`）；撤回后必修标记消失。项目本身只要处于
+`PUBLISHED` 就**对所有学生开放**，不看任务（见下面的「学生成长视图」）。落点表是
+`publish_task` / `publish_task_target` / `publish_task_job` / `publish_task_project`，
+设计与取舍见 [方案设计](docs/方案设计.md)。
+
+教师端的班级 / 分组 / 任务进度看板：`GET /api/teachers/{teacher_id}/classes`（一次返回任教班级、
+学生总数、每个分组的学生明细、每个任务的完成进度与平均完成率），口径与示例见
+[接口文档](docs/教师端接口文档.md) §5。
+
 ### 学生成长视图（岗位推荐 / 技能树 / 实训项目 / 岗位项目进度 / 项目详情）
 
 五个只读派生接口，全部按学生维度返回，口径统一收在 `app/services/student_overview.py`：
@@ -165,6 +230,8 @@ curl -N -X POST http://127.0.0.1:8000/api/qa/sessions/1/ask \
 | GET | `/api/students/{student_id}/job-recommendations` | 岗位推荐，默认前三名（`limit` 可调），按技能匹配度倒序 |
 | GET | `/api/students/{student_id}/skill-tree-progress` | 全部技能树与技能点 + 单树进度、整体进度、技能点统计 |
 | GET | `/api/students/{student_id}/training-projects` | 已发布实训项目 + 最高分、关卡进度（总/完成）、所属岗位、关联技能点、项目状态 |
+| GET | `/api/students/{student_id}/my-projects` | 我的实训（自己挑的 ∪ 老师点名必修的），带 `picked` / `is_required` / `sources` |
+| POST / PATCH / DELETE | `/api/students/{student_id}/my-projects…` | 加入（批量幂等）/ 覆盖式排序 / 移出 |
 | GET | `/api/students/{student_id}/job-project-progress` | 所选岗位上实训项目的分档进度：基础 / 进阶 / 拓展各多少关，各完成多少（`job_id` 可指定岗位） |
 | GET | `/api/students/{student_id}/projects/{project_id}` | 项目详情：任务简介 + 关卡（含每个子标题的简介）+ 本轮已保存的作答 + 历史提交次数/日期与 AI、教师评语 |
 
@@ -172,17 +239,31 @@ curl -N -X POST http://127.0.0.1:8000/api/qa/sessions/1/ask \
 curl http://127.0.0.1:8000/api/students/1/job-recommendations
 curl http://127.0.0.1:8000/api/students/1/skill-tree-progress
 curl http://127.0.0.1:8000/api/students/1/training-projects
+curl http://127.0.0.1:8000/api/students/1/my-projects
 curl http://127.0.0.1:8000/api/students/1/job-project-progress
 curl http://127.0.0.1:8000/api/students/1/projects/1
 ```
 
-口径：技能点进度取 `student_skill.progress`（"完成项目数 ÷ 关联项目总数"×100，手工调整记
-MANUAL）；岗位匹配度、技能树进度、整体进度都是**相关技能点进度的均值**；岗位的关联项目 =
-`training_project.job_id` 指向该岗位且已发布（PUBLISHED）的项目；关卡进度 =
+口径：技能点进度取 `student_skill.progress`（"完成项目数 ÷ 关联项目总数"×100，其中**分母 = 该
+技能点关联的全部已发布（PUBLISHED）项目**，与任务无关；手工调整记 MANUAL）；
+岗位匹配度、技能树进度、整体进度都是**相关技能点进度的均值**；岗位的关联项目 =
+`training_project.job_id` 指向该岗位的已发布项目；
+关卡进度 =
 `project_module` 的关卡数与最新一轮闯关 `attempt_stage.is_filled` 的个数（重新挑战从 0 重新计，
 最高分保留）。没关联技能的岗位不参与推荐；学生没开始过的项目也会在实训项目列表里返回
 （`status=NOT_STARTED`、成绩 null、进度 0/关卡总数）。岗位项目进度不传 `job_id` 时取学生当前
 主岗位（没有主岗位取最近选的），一个岗位都没选就返回 `job_id=null` + 三档全 0。
+
+> **口径**：`training_project.status = 'PUBLISHED'` 就是**对学生开放**——教师发布项目后，
+> 学生端实训项目列表里立刻能看到并开始闯关，不用等任务；任务只把项目标成"必修"，
+> 与"平时自己刷项目"共用同一份闯关记录（完成状态、最高分、提交历史都按 `学生 × 项目` 记）。
+> 草稿（DRAFT）/ 已下架（OFF_SHELF）的项目既不开放闯关，也不能发布任务。
+
+项目变多以后，学生从项目库里把自己喜欢的挑进「我的实训」（`student_project_pick`）：
+**清单表只存"学生主动挑的"**，老师点名必修的项目是实时算出来的，展示时并集 —— 一条项目只出现
+一次，用 `picked`（自己加的）/ `is_required`（老师点名）/ `sources`（`SELF`、`TEACHER` 可同时存在）
+说明它为什么在这里。必修项目移出后仍在列表里（任务撤回后才消失），自己挑过的项目在任务撤回后
+也留着；项目下架后列表里不显示但记录保留。加入清单**不影响技能进度**（分母仍是全部已发布项目）。
 
 项目详情里的关卡子标题取自 `project_module.items_json`（**由教师在项目里手填，模块库不预设**），
 每项是 `{"title": "检测对象描述", "prompt": "工件名称、材质、尺寸范围"}`：`prompt` 就是子标题的
@@ -266,6 +347,7 @@ models/            本地模型权重（gitignore）
 ## 文档
 
 - [RAG 系统实施方案](docs/RAG系统实施方案.md)：向量库选型、切片策略、检索链路、分期计划
+- [平台接口文档（全量 177 个接口）](docs/教师端接口文档.md)：系统与枚举字典、账户权限、教学组织（班级/名单/分组）、岗位与技能、实训项目、任务下发、闯关评审、知识库、AI 问答、教师看板
 - [数据库表字段清单](docs/数据库表字段清单.md) ｜ [DDL 草稿](docs/database_schema_draft.sql)
 - [后端脚手架实施方案](docs/后端脚手架实施方案.md)
 - [系统架构与请求处理链路](docs/系统架构与请求处理链路.md)
@@ -275,7 +357,7 @@ models/            本地模型权重（gitignore）
 
 ## 待确认
 
-`project_stage_template` 的七大模块 `stage_key`、名称与默认权重取自《需求确认书 0706》
+`project_stage_template` 的七大模块名称（唯一）与默认权重取自《需求确认书 0706》
 （需求分析、方案设计、数据处理、模型训练、模型优化、模型测试、实训报告上传，
 权重 10/15/15/20/15/15/10）。如与最终评审口径不同，改 `app/db/seed.py` 后重新执行
 `uv run python -m app.db.init_db` 即可（种子幂等，不会重复插入）。

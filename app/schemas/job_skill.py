@@ -97,7 +97,6 @@ class SkillTreeCreate(SkillTreeBase):
 
 
 class SkillTreeUpdate(SQLModel):
-    tree_code: str | None = Field(default=None, max_length=50)
     tree_name: str | None = Field(default=None, max_length=100)
     description: str | None = Field(default=None, max_length=255)
     status: str | None = Field(default=None, max_length=20)
@@ -116,7 +115,6 @@ class SkillNodeCreate(SkillNodeBase):
 
 class SkillNodeUpdate(SQLModel):
     tree_id: int | None = None
-    node_code: str | None = Field(default=None, max_length=50)
     node_name: str | None = Field(default=None, max_length=100)
     description: str | None = None
     unlock_note: str | None = Field(default=None, max_length=255)
@@ -131,7 +129,6 @@ class SkillNodeRead(TimestampRead, SoftDeleteRead, SkillNodeBase):
 class SkillNodeCreateIn(SQLModel):
     """在技能树下新建节点（tree_id 取自路径，不需要放在 body 里）。"""
 
-    node_code: str = Field(max_length=50, description="技能节点编码")
     node_name: str = Field(max_length=100, description="技能节点名称")
     description: str | None = Field(default=None, description="说明/描述")
     unlock_note: str | None = Field(default=None, max_length=255, description="给学生看的解锁说明")
@@ -187,7 +184,6 @@ class StudentSkillRead(TimestampRead, StudentSkillBase):
 class StudentSkillDetail(StudentSkillRead):
     """学生技能进度：带技能节点与技能树信息。"""
 
-    node_code: str | None = Field(default=None, description="技能节点编码")
     node_name: str | None = Field(default=None, description="技能节点名称")
     tree_id: int | None = Field(default=None, description="所属技能树 ID")
     tree_name: str | None = Field(default=None, description="所属技能树名称")
@@ -253,7 +249,6 @@ class JobSkillProgressItem(SQLModel):
     """岗位关联的一个技能点：进度来自 student_skill，项目数由 project_skill 推导。"""
 
     skill_node_id: int = Field(description="技能节点 ID")
-    node_code: str = Field(description="技能节点编码")
     node_name: str = Field(description="技能节点名称")
     progress: float = Field(default=0, description="该技能点的进度 0~100")
 
@@ -262,7 +257,6 @@ class JobSkillGroup(SQLModel):
     """按技能树（四大体系）分组的岗位技能点。"""
 
     tree_id: int = Field(description="技能树 ID")
-    tree_code: str | None = Field(default=None, description="技能树编码")
     tree_name: str | None = Field(default=None, description="技能树名称")
     skill_total_count: int = Field(default=0, description="该体系下岗位关联的技能点总数")
     skill_done_count: int = Field(default=0, description="其中进度已达 100% 的个数")
@@ -298,7 +292,6 @@ class SkillNodeProgressItem(SQLModel):
     """技能节点 + 该学生的进度。"""
 
     skill_node_id: int = Field(description="技能节点 ID")
-    node_code: str = Field(description="技能节点编码")
     node_name: str = Field(description="技能节点名称")
     description: str | None = Field(default=None, description="技能点说明")
     status: str = Field(default="ENABLED", description="ENABLED / DISABLED")
@@ -311,7 +304,6 @@ class SkillTreeProgress(SQLModel):
     """技能树 + 该树的总进度与该学生的节点进度。"""
 
     tree_id: int = Field(description="技能树 ID")
-    tree_code: str = Field(description="技能树编码")
     tree_name: str = Field(description="技能树名称")
     description: str | None = Field(default=None, description="技能树说明")
     status: str = Field(default="ENABLED", description="ENABLED / DISABLED")

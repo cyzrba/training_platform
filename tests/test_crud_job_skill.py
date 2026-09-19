@@ -25,16 +25,14 @@ async def _create_job(client: httpx.AsyncClient, name: str = "工业视觉工程
     return response.json()
 
 
-async def _create_tree(client: httpx.AsyncClient, code: str = "CV_BASIC") -> dict:
-    response = await client.post(
-        TREES, json={"tree_code": code, "tree_name": "传统算法系", "description": "图像算法技能树"}
-    )
+async def _create_tree(client: httpx.AsyncClient, name: str = "传统算法系") -> dict:
+    response = await client.post(TREES, json={"tree_name": name, "description": "图像算法技能树"})
     assert response.status_code == 201, response.text
     return response.json()
 
 
-async def _create_node(client: httpx.AsyncClient, tree_id: int, code: str, name: str) -> dict:
-    response = await client.post(f"{TREES}/{tree_id}/nodes", json={"node_code": code, "node_name": name})
+async def _create_node(client: httpx.AsyncClient, tree_id: int, name: str) -> dict:
+    response = await client.post(f"{TREES}/{tree_id}/nodes", json={"node_name": name})
     assert response.status_code == 201, response.text
     return response.json()
 
@@ -75,15 +73,15 @@ async def test_job_crud_and_filters(client: httpx.AsyncClient) -> None:
 async def test_job_skills_cover_and_append(client: httpx.AsyncClient) -> None:
     job = await _create_job(client)
     tree = await _create_tree(client)
-    node_a = await _create_node(client, tree["id"], "IMG_FILTER", "图像滤波")
-    node_b = await _create_node(client, tree["id"], "EDGE_DETECT", "边缘检测")
+    node_a = await _create_node(client, tree["id"], "图像滤波")
+    node_b = await _create_node(client, tree["id"], "边缘检测")
 
     assert (await client.put(f"{JOBS}/{job['id']}/skills", json={"skill_node_ids": []})).json() == []
 
     covered = await client.put(
         f"{JOBS}/{job['id']}/skills", json={"skill_node_ids": [node_a["id"], node_b["id"]]}
     )
-    assert [item["node_code"] for item in covered.json()] == ["IMG_FILTER", "EDGE_DETECT"]
+    assert [item["node_name"] for item in covered.json()] == ["图像滤波", "边缘检测"]
     assert (await client.get(f"{JOBS}/{job['id']}")).json()["skill_count"] == 2
 
     # 覆盖式：只留一个
@@ -104,13 +102,11 @@ async def test_job_skills_cover_and_append(client: httpx.AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_skill_tree_and_nodes(client: httpx.AsyncClient) -> None:
     tree = await _create_tree(client)
-    duplicate = await client.post(TREES, json={"tree_code": "CV_BASIC", "tree_name": "重复树"})
+    duplicate = await client.post(TREES, json={"tree_name": "传统算法系"})
     assert duplicate.status_code == 200
 
-    node = await _create_node(client, tree["id"], "IMG_FILTER", "图像滤波")
-    duplicate_node = await client.post(
-        f"{TREES}/{tree['id']}/nodes", json={"node_code": "IMG_FILTER", "node_name": "重复节点"}
-    )
+    node = await _create_node(client, tree["id"], "图像滤波")
+    duplicate_node = await client.post(f"{TREES}/{tree['id']}/nodes", json={"node_name": "图像滤波"})
     assert duplicate_node.status_code == 200
 
     listed = (await client.get(f"{TREES}/{tree['id']}/nodes")).json()
@@ -119,7 +115,7 @@ async def test_skill_tree_and_nodes(client: httpx.AsyncClient) -> None:
     assert listed[0]["prerequisite_ids"] == []
 
     detail = await client.get(f"{NODES}/{node['id']}")
-    assert detail.json()["node_code"] == "IMG_FILTER"
+    assert detail.json()["node_name"] == "图像滤波"
 
     patched = await client.patch(f"{NODES}/{node['id']}", json={"unlock_note": "完成图像基础模块后解锁"})
     assert patched.json()["unlock_note"] == "完成图像基础模块后解锁"
@@ -129,17 +125,37 @@ async def test_skill_tree_and_nodes(client: httpx.AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_skill_tree_nodes_hide_soft_deleted(client: httpx.AsyncClient) -> None:
+    """软删的节点要从「树下的节点列表」里消失，前置技能 ID 也不能再指向它。"""
+    tree = await _create_tree(client)
+    base = await _create_node(client, tree["id"], "图像基础")
+    advanced = await _create_node(client, tree["id"], "图像滤波")
+    await client.put(f"{NODES}/{advanced['id']}/dependencies", json={"prerequisite_node_ids": [base["id"]]})
+
+    listed = (await client.get(f"{TREES}/{tree['id']}/nodes")).json()
+    assert [item["node_name"] for item in listed] == ["图像基础", "图像滤波"]
+    assert listed[1]["prerequisite_ids"] == [base["id"]]
+
+    assert (await client.delete(f"{NODES}/{base['id']}")).status_code == 200
+
+    listed = (await client.get(f"{TREES}/{tree['id']}/nodes")).json()
+    assert [item["node_name"] for item in listed] == ["图像滤波"]
+    assert listed[0]["prerequisite_ids"] == []
+    assert (await client.get(f"{NODES}/{advanced['id']}")).json()["prerequisite_ids"] == []
+
+
+@pytest.mark.asyncio
 async def test_skill_dependencies_dag_guards(client: httpx.AsyncClient) -> None:
     tree = await _create_tree(client)
-    first = await _create_node(client, tree["id"], "IMG_BASE", "图像基础")
-    second = await _create_node(client, tree["id"], "IMG_FILTER", "图像滤波")
-    third = await _create_node(client, tree["id"], "EDGE_DETECT", "边缘检测")
+    first = await _create_node(client, tree["id"], "图像基础")
+    second = await _create_node(client, tree["id"], "图像滤波")
+    third = await _create_node(client, tree["id"], "边缘检测")
 
     result = await client.put(
         f"{NODES}/{second['id']}/dependencies", json={"prerequisite_node_ids": [first["id"]]}
     )
     assert result.status_code == 200
-    assert [item["node_code"] for item in result.json()] == ["IMG_BASE"]
+    assert [item["node_name"] for item in result.json()] == ["图像基础"]
     assert (await client.get(f"{NODES}/{second['id']}/dependencies")).json()[0]["id"] == first["id"]
 
     # 自环拒绝
@@ -252,7 +268,7 @@ async def test_student_skill_list_and_manual_patch(client: httpx.AsyncClient, db
 
     student = await _create_student(client, "2026002")
     tree = await _create_tree(client)
-    node = await _create_node(client, tree["id"], "IMG_FILTER", "图像滤波")
+    node = await _create_node(client, tree["id"], "图像滤波")
 
     # 进度记录由业务链路（P2 项目完成）生成，这里直接落一条再走接口
     from app.models.job_skill import StudentSkill

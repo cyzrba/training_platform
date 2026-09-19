@@ -12,13 +12,10 @@ from app.services import storage
 TEMPLATES = "/api/stage-templates"
 
 
-async def _create_template(
-    client: httpx.AsyncClient, key: str = "CUSTOM_STAGE", name: str = "自定义关卡"
-) -> dict:
+async def _create_template(client: httpx.AsyncClient, name: str = "自定义关卡") -> dict:
     response = await client.post(
         TEMPLATES,
         json={
-            "stage_key": key,
             "stage_name": name,
             "description": "教师自定义的关卡",
             "default_weight": 20,
@@ -31,8 +28,8 @@ async def _create_template(
 
 @pytest.mark.asyncio
 async def test_stage_template_crud(client: httpx.AsyncClient) -> None:
-    first = await _create_template(client, "REQUIREMENT_ANALYSIS", "需求分析")
-    second = await _create_template(client, "SOLUTION_DESIGN", "方案设计")
+    first = await _create_template(client, "需求分析")
+    second = await _create_template(client, "方案设计")
     assert first["sort_no"] == 1 and second["sort_no"] == 2  # 序号自动递增
     assert str(first["default_weight"]) == "20.0000000000"
 
@@ -41,10 +38,8 @@ async def test_stage_template_crud(client: httpx.AsyncClient) -> None:
     assert [item["stage_name"] for item in listed["items"]] == ["需求分析", "方案设计"]  # 按 sort_no
     assert (await client.get(TEMPLATES, params={"keyword": "方案"})).json()["total"] == 1
 
-    # 编码唯一
-    duplicate = await client.post(
-        TEMPLATES, json={"stage_key": "REQUIREMENT_ANALYSIS", "stage_name": "重复关卡"}
-    )
+    # 名称唯一
+    duplicate = await client.post(TEMPLATES, json={"stage_name": "需求分析"})
     assert duplicate.status_code == 200
     assert duplicate.json()["code"] == 422
     assert "已存在" in duplicate.json()["msg"]
@@ -70,7 +65,7 @@ async def test_stage_template_crud(client: httpx.AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_template_in_use_cannot_be_deleted(client: httpx.AsyncClient, db_session) -> None:
-    template = await _create_template(client, "MODEL_TESTING", "模型测试")
+    template = await _create_template(client, "模型测试")
 
     # 造一个选了该模板的项目（项目域接口在 P2，这里直接落库）
     project = TrainingProject(project_name="缺陷检测实训", project_level="BASIC")
@@ -117,7 +112,7 @@ async def test_project_module_must_come_from_template_library(db_session) -> Non
 
 @pytest.mark.asyncio
 async def test_same_template_cannot_be_added_twice(db_session) -> None:
-    template = ProjectStageTemplate(stage_key="DATA_PROCESSING", stage_name="数据处理")
+    template = ProjectStageTemplate(stage_name="数据处理")
     project = TrainingProject(project_name="数据处理实训", project_level="BASIC")
     db_session.add_all([template, project])
     await db_session.flush()
@@ -132,31 +127,31 @@ async def test_same_template_cannot_be_added_twice(db_session) -> None:
 
 @pytest.mark.asyncio
 async def test_stage_template_soft_delete_and_restore(client: httpx.AsyncClient) -> None:
-    """删掉是软删：列表里消失，但用同一个编码再建会把原条目恢复出来。"""
-    template = await _create_template(client, "MODEL_OPTIMIZATION", "模型优化")
+    """删掉是软删：列表里消失，但用同一个名称再建会把原条目恢复出来。"""
+    template = await _create_template(client, "模型优化")
     assert (await client.delete(f"{TEMPLATES}/{template['id']}")).status_code == 200
 
     listed = (await client.get(TEMPLATES)).json()
-    assert [item["stage_key"] for item in listed["items"]] == []
+    assert [item["stage_name"] for item in listed["items"]] == []
     assert (await client.get(f"{TEMPLATES}/{template['id']}")).json()["code"] == 422
 
-    # 同一个编码再建一次 → 恢复原条目（HTTP 200，而不是新建 201）
+    # 同一个名称再建一次 → 恢复原条目（HTTP 200，而不是新建 201）
     restored = await client.post(
         TEMPLATES,
-        json={"stage_key": "MODEL_OPTIMIZATION", "stage_name": "模型优化（新版）", "default_weight": 25},
+        json={"stage_name": "模型优化", "default_weight": 25},
     )
     assert restored.status_code == 200
     assert restored.json()["id"] == template["id"]
-    assert restored.json()["stage_name"] == "模型优化（新版）"
+    assert Decimal(str(restored.json()["default_weight"])) == Decimal(25)
     assert (await client.get(TEMPLATES)).json()["total"] == 1
 
 
 @pytest.mark.asyncio
 async def test_project_builds_modules_from_template_library(client: httpx.AsyncClient) -> None:
     """项目流程：建项目 → 从模块库挑关卡 → 调权重顺序 → 权重满 100 才能发布。"""
-    first = await _create_template(client, "REQUIREMENT_ANALYSIS", "需求分析")
-    second = await _create_template(client, "SOLUTION_DESIGN", "方案设计")
-    third = await _create_template(client, "MODEL_TRAINING", "模型训练")
+    first = await _create_template(client, "需求分析")
+    second = await _create_template(client, "方案设计")
+    third = await _create_template(client, "模型训练")
 
     project = (
         await client.post(
@@ -179,7 +174,7 @@ async def test_project_builds_modules_from_template_library(client: httpx.AsyncC
         await client.post(f"/api/projects/{project['id']}/modules", json={"template_id": first["id"]})
     ).json()
     assert added["stage_no"] == 1
-    assert added["stage_key"] == "REQUIREMENT_ANALYSIS" and added["stage_name"] == "需求分析"
+    assert added["stage_name"] == "需求分析"
     assert Decimal(str(added["weight"])) == Decimal(20)  # 模板默认权重
     assert added["required"] is True
 
@@ -220,9 +215,9 @@ async def test_project_builds_modules_from_template_library(client: httpx.AsyncC
 @pytest.mark.asyncio
 async def test_project_module_order_and_removal(client: httpx.AsyncClient) -> None:
     templates = [
-        await _create_template(client, "REQUIREMENT_ANALYSIS", "需求分析"),
-        await _create_template(client, "DATA_PROCESSING", "数据处理"),
-        await _create_template(client, "REPORT_UPLOAD", "实训报告上传"),
+        await _create_template(client, "需求分析"),
+        await _create_template(client, "数据处理"),
+        await _create_template(client, "实训报告上传"),
     ]
     project = (
         await client.post("/api/projects", json={"project_name": "排序实训", "project_level": "BASIC"})
@@ -261,23 +256,23 @@ async def test_project_module_order_and_removal(client: httpx.AsyncClient) -> No
 @pytest.mark.asyncio
 async def test_project_skills(client: httpx.AsyncClient) -> None:
     """项目所需技能：覆盖式设置 + 单条增删，决定"完成项目推进哪些技能"。"""
-    tree = (await client.post("/api/skill-trees", json={"tree_code": "CV", "tree_name": "视觉系"})).json()
+    tree = (await client.post("/api/skill-trees", json={"tree_name": "视觉系"})).json()
     first = (
         await client.post(
             f"/api/skill-trees/{tree['id']}/nodes",
-            json={"node_code": "IMG_BASE", "node_name": "图像基础"},
+            json={"node_name": "图像基础"},
         )
     ).json()
     second = (
         await client.post(
             f"/api/skill-trees/{tree['id']}/nodes",
-            json={"node_code": "EDGE_DETECT", "node_name": "边缘检测"},
+            json={"node_name": "边缘检测"},
         )
     ).json()
     third = (
         await client.post(
             f"/api/skill-trees/{tree['id']}/nodes",
-            json={"node_code": "MODEL_TRAIN", "node_name": "模型训练"},
+            json={"node_name": "模型训练"},
         )
     ).json()
 
@@ -290,7 +285,7 @@ async def test_project_skills(client: httpx.AsyncClient) -> None:
         f"/api/projects/{project['id']}/skills",
         json={"skill_node_ids": [first["id"], second["id"]]},
     )
-    assert [node["node_code"] for node in covered.json()] == ["IMG_BASE", "EDGE_DETECT"]
+    assert [node["node_name"] for node in covered.json()] == ["图像基础", "边缘检测"]
 
     # 追加单个技能；重复追加报错；不存在的技能节点报错
     assert (await client.post(f"/api/projects/{project['id']}/skills/{third['id']}")).status_code == 201
@@ -426,7 +421,6 @@ async def test_stage_template_has_no_default_items(client: httpx.AsyncClient) ->
         await client.post(
             TEMPLATES,
             json={
-                "stage_key": "REQUIREMENT_ANALYSIS",
                 "stage_name": "需求分析",
                 "default_weight": 10,
                 # 即使老前端传了子标题，也应该被忽略
@@ -443,12 +437,8 @@ async def test_stage_template_has_no_default_items(client: httpx.AsyncClient) ->
 @pytest.mark.asyncio
 async def test_project_module_items_are_typed_by_teacher(client: httpx.AsyncClient) -> None:
     """子标题全部由教师在项目里手填：不传就是空，填了就是那一套，不同项目互不影响。"""
-    template = (
-        await client.post(TEMPLATES, json={"stage_key": "REQUIREMENT_ANALYSIS", "stage_name": "需求分析"})
-    ).json()
-    second_template = (
-        await client.post(TEMPLATES, json={"stage_key": "SOLUTION_DESIGN", "stage_name": "方案设计"})
-    ).json()
+    template = (await client.post(TEMPLATES, json={"stage_name": "需求分析"})).json()
+    second_template = (await client.post(TEMPLATES, json={"stage_name": "方案设计"})).json()
 
     first_project = (
         await client.post("/api/projects", json={"project_name": "项目甲", "project_level": "BASIC"})

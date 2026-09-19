@@ -56,8 +56,8 @@ async def test_check_constraint_and_project_module(db_session) -> None:
     db_session.add(project)
     await db_session.flush()
 
-    first_template = ProjectStageTemplate(stage_key="REQUIREMENT_ANALYSIS", stage_name="需求分析")
-    second_template = ProjectStageTemplate(stage_key="SOLUTION_DESIGN", stage_name="方案设计")
+    first_template = ProjectStageTemplate(stage_name="需求分析")
+    second_template = ProjectStageTemplate(stage_name="方案设计")
     db_session.add_all(
         [
             first_template,

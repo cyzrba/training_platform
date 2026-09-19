@@ -1,4 +1,4 @@
-"""全部 ORM 表模型（38 张表）。
+"""全部 ORM 表模型（44 张表）。
 
 导入本包即完成 Base.metadata 注册，Alembic 与建表脚本都依赖这里的汇总导入。
 """
@@ -17,6 +17,7 @@ from app.models.attempt import (
     FileAsset,
     ProjectSubmission,
     StudentProject,
+    StudentProjectPick,
     TrainingAttempt,
 )
 from app.models.base import Base, CreatedAtMixin, SoftDeleteMixin, TimestampMixin
@@ -47,6 +48,12 @@ from app.models.project import (
     ProjectStageTemplate,
     TrainingProject,
 )
+from app.models.publish import (
+    PublishTask,
+    PublishTaskJob,
+    PublishTaskProject,
+    PublishTaskTarget,
+)
 from app.models.review import ReviewAiJob, ReviewRecord
 
 __all__ = [
@@ -74,6 +81,10 @@ __all__ = [
     "ProjectSkill",
     "ProjectStageTemplate",
     "ProjectSubmission",
+    "PublishTask",
+    "PublishTaskJob",
+    "PublishTaskProject",
+    "PublishTaskTarget",
     "ReviewAiJob",
     "ReviewRecord",
     "SkillNode",
@@ -83,6 +94,7 @@ __all__ = [
     "StudentCertificate",
     "StudentJob",
     "StudentProject",
+    "StudentProjectPick",
     "StudentSkill",
     "SysPermission",
     "SysRole",

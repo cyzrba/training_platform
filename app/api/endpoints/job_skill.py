@@ -296,7 +296,7 @@ async def remove_job_skill(
 async def list_skill_trees(
     trees: SkillTreeRepo,
     page: PageDep,
-    keyword: Annotated[str | None, Query(description="技能树编码或名称模糊搜索")] = None,
+    keyword: Annotated[str | None, Query(description="技能树名称模糊搜索")] = None,
     status_: Annotated[str | None, Query(alias="status", description="ENABLED / DISABLED")] = None,
 ) -> Page[object]:
     return await trees.list_trees(page, keyword=keyword, status=status_)
@@ -309,8 +309,8 @@ async def list_skill_trees(
     summary="新建技能树",
 )
 async def create_skill_tree(payload: SkillTreeCreate, trees: SkillTreeRepo) -> SkillTree:
-    if await trees.by_code(payload.tree_code) is not None:
-        raise ConflictError(f"技能树编码 {payload.tree_code} 已存在")
+    if await trees.by_name(payload.tree_name) is not None:
+        raise ConflictError(f"技能树 {payload.tree_name} 已存在")
     return await trees.create(payload.model_dump())
 
 
@@ -323,9 +323,9 @@ async def get_skill_tree(tree_id: int, trees: SkillTreeRepo) -> SkillTree:
 async def update_skill_tree(tree_id: int, payload: SkillTreeUpdate, trees: SkillTreeRepo) -> SkillTree:
     tree = await _tree_or_404(trees, tree_id)
     data = payload.model_dump(exclude_unset=True)
-    new_code = data.get("tree_code")
-    if new_code and new_code != tree.tree_code and await trees.by_code(new_code) is not None:
-        raise ConflictError(f"技能树编码 {new_code} 已存在")
+    new_name = data.get("tree_name")
+    if new_name and new_name != tree.tree_name and await trees.by_name(new_name) is not None:
+        raise ConflictError(f"技能树 {new_name} 已存在")
     return await trees.update(tree, data)
 
 
@@ -370,8 +370,8 @@ async def create_skill_node(
     tree_id: int, payload: SkillNodeCreateIn, trees: SkillTreeRepo, nodes: SkillNodeRepo
 ) -> SkillNode:
     await _tree_or_404(trees, tree_id)
-    if await nodes.by_code(payload.node_code) is not None:
-        raise ConflictError(f"技能节点编码 {payload.node_code} 已存在")
+    if await nodes.by_name(payload.node_name) is not None:
+        raise ConflictError(f"技能节点 {payload.node_name} 已存在")
     data = {"tree_id": tree_id, **payload.model_dump()}
     if data.get("unlock_rule_json") is None:
         data["unlock_rule_json"] = {}
@@ -395,9 +395,9 @@ async def get_skill_node(
 async def update_skill_node(node_id: int, payload: SkillNodeUpdate, nodes: SkillNodeRepo) -> SkillNode:
     node = await _node_or_404(nodes, node_id)
     data = payload.model_dump(exclude_unset=True)
-    new_code = data.get("node_code")
-    if new_code and new_code != node.node_code and await nodes.by_code(new_code) is not None:
-        raise ConflictError(f"技能节点编码 {new_code} 已存在")
+    new_name = data.get("node_name")
+    if new_name and new_name != node.node_name and await nodes.by_name(new_name) is not None:
+        raise ConflictError(f"技能节点 {new_name} 已存在")
     return await nodes.update(node, data)
 
 
@@ -602,7 +602,6 @@ async def list_student_skills(
     return [
         {
             **skill.model_dump(),
-            "node_code": node.node_code,
             "node_name": node.node_name,
             "tree_id": tree.id,
             "tree_name": tree.tree_name,
@@ -636,7 +635,6 @@ async def patch_student_skill(
     tree = await trees.get(node.tree_id) if node else None
     return {
         **updated.model_dump(),
-        "node_code": node.node_code if node else None,
         "node_name": node.node_name if node else None,
         "tree_id": tree.id if tree else None,
         "tree_name": tree.tree_name if tree else None,
@@ -646,7 +644,7 @@ async def patch_student_skill(
 @router.post(
     "/students/{student_id}/skills/recalculate",
     response_model=ApiResponse[SkillRecalcResult],
-    summary="按'完成项目数 ÷ 关联项目总数'重算学生技能进度",
+    summary="重算学生技能进度（完成项目数 ÷ 关联项目总数，分母只算发布了任务的项目）",
 )
 async def recalculate_skills(student_id: int, db: DbSession, students: UserRepo) -> SkillRecalcResult:
     await _student_or_404(students, student_id)

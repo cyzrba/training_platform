@@ -20,6 +20,7 @@ from app.crud.attempt import (
 )
 from app.crud.project import TrainingProjectRepository
 from app.crud.review import ReviewRecordRepository
+from tests import helpers
 
 DETAIL = "/api/students/{student_id}/projects/{project_id}"
 
@@ -32,16 +33,16 @@ async def _user(client: httpx.AsyncClient, user_no: str, name: str, user_type: s
         "/api/users", json={"user_no": user_no, "real_name": name, "user_type": user_type}
     )
     assert response.status_code == 201, response.text
+    if user_type == "STUDENT":
+        # 学生要看到项目，得先在班里、并且老师把项目发给他（见 docs/方案设计.md §4.2）
+        await helpers.enroll(client, user_no)
     return response.json()
 
 
-async def _template(
-    client: httpx.AsyncClient, key: str, name: str, *, default_requirement: str | None = None
-) -> dict:
+async def _template(client: httpx.AsyncClient, name: str, *, default_requirement: str | None = None) -> dict:
     response = await client.post(
         "/api/stage-templates",
         json={
-            "stage_key": key,
             "stage_name": name,
             "description": f"{name}要做什么的说明",
             "default_requirement": default_requirement,
@@ -141,10 +142,11 @@ async def test_student_project_detail_with_history_and_reviews(
     """项目详情：任务简介 + 关卡（含子标题简介）+ 提交历史（次数/日期/评语）。"""
     student = await _user(client, "2026001", "张三")
     teacher = await _user(client, "T0001", "李老师", user_type="TEACHER")
-    template_a = await _template(client, "REQUIREMENT_ANALYSIS", "需求分析", default_requirement="逐条写需求")
-    template_b = await _template(client, "REPORT_UPLOAD", "实训报告上传")
+    template_a = await _template(client, "需求分析", default_requirement="逐条写需求")
+    template_b = await _template(client, "实训报告上传")
 
     project = await _published_project(db_session, "工业缺陷检测实训", "工业视觉缺陷检测全流程交付")
+    await helpers.publish(client, [project["id"]])
     module_a = await _module(
         client,
         project["id"],
@@ -225,11 +227,7 @@ async def test_student_project_detail_with_history_and_reviews(
 
     # 关卡按 stage_no 排序，带说明 / 要求 / 验收标准 / 子标题与子标题简介
     first, second = detail["levels"]
-    assert (first["stage_no"], first["stage_key"], first["stage_name"]) == (
-        1,
-        "REQUIREMENT_ANALYSIS",
-        "需求分析",
-    )
+    assert (first["stage_no"], first["stage_name"]) == (1, "需求分析")
     assert first["description"] == "需求分析要做什么的说明"
     assert first["requirement"] == "逐条写需求"
     assert first["weight"] == 50
@@ -267,8 +265,9 @@ async def test_student_project_detail_for_untouched_student(
 ) -> None:
     """学生没开始过的项目：状态 NOT_STARTED、没有提交历史，但关卡与子标题照常返回。"""
     student = await _user(client, "2026001", "张三")
-    template = await _template(client, "REQUIREMENT_ANALYSIS", "需求分析")
+    template = await _template(client, "需求分析")
     project = await _published_project(db_session, "工业缺陷检测实训", "任务简介")
+    await helpers.publish(client, [project["id"]])
     await _module(
         client, project["id"], template["id"], 1, [{"title": "检测对象描述", "prompt": "写清楚工件"}]
     )
@@ -290,9 +289,10 @@ async def test_student_project_detail_for_untouched_student(
 async def test_save_answers_draft_and_resume(client: httpx.AsyncClient, db_session: AsyncSession) -> None:
     """点「保存作答」把本轮填了一半的内容存下来，下次进来接着写（拿的是本轮已保存的作答）。"""
     student = await _user(client, "2026001", "张三")
-    template_a = await _template(client, "REQUIREMENT_ANALYSIS", "需求分析")
-    template_b = await _template(client, "REPORT_UPLOAD", "实训报告上传")
+    template_a = await _template(client, "需求分析")
+    template_b = await _template(client, "实训报告上传")
     project = await _published_project(db_session, "工业缺陷检测实训", "任务简介")
+    await helpers.publish(client, [project["id"]])
     module_a = await _module(client, project["id"], template_a["id"], 1, [{"title": "检测对象描述"}])
     module_b = await _module(client, project["id"], template_b["id"], 2, [{"title": "报告文件"}])
 

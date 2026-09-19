@@ -71,19 +71,17 @@ async def test_teacher_onboarding_flow(client: httpx.AsyncClient, db_session) ->
 
     # ⑥ 建岗位 + 技能树 + 节点，并挂到岗位上
     job = (await client.post("/api/jobs", json={"job_name": "工业视觉工程师"})).json()
-    tree = (
-        await client.post("/api/skill-trees", json={"tree_code": "CV_BASIC", "tree_name": "传统算法系"})
-    ).json()
+    tree = (await client.post("/api/skill-trees", json={"tree_name": "传统算法系"})).json()
     base = (
         await client.post(
             f"/api/skill-trees/{tree['id']}/nodes",
-            json={"node_code": "IMG_BASE", "node_name": "图像基础"},
+            json={"node_name": "图像基础"},
         )
     ).json()
     edge = (
         await client.post(
             f"/api/skill-trees/{tree['id']}/nodes",
-            json={"node_code": "EDGE_DETECT", "node_name": "边缘检测"},
+            json={"node_name": "边缘检测"},
         )
     ).json()
     await client.put(

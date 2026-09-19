@@ -51,22 +51,22 @@ JOB_NAME = "工业视觉工程师"
 #: 本项目要推进的技能点：(技能树 code, 技能树名, 技能节点 code, 技能节点名)
 #: 照案例的交付环节挑的：光学选型 → 图像处理 → 模型训练调优 → 产线联调。
 #: 节点缺失会在对应技能树下补建，所以脚本不依赖种子数据是否跑过。
-PROJECT_SKILL_NODES: list[tuple[str, str, str, str]] = [
-    ("OPTICAL_IMAGING", "光学成像系", "LIGHT_SELECT", "光源选型"),
-    ("OPTICAL_IMAGING", "光学成像系", "CAMERA_SELECT", "相机选型"),
-    ("OPTICAL_IMAGING", "光学成像系", "PIN_DEFECT", "引脚缺陷检测"),
-    ("TRADITIONAL_ALGORITHM", "传统算法系", "IMG_FILTER", "图像滤波"),
-    ("TRADITIONAL_ALGORITHM", "传统算法系", "EDGE_DETECT", "边缘检测"),
-    ("DEEP_LEARNING", "深度学习系", "MODEL_TRAIN", "模型训练"),
-    ("DEEP_LEARNING", "深度学习系", "MODEL_TUNE", "模型调优"),
-    ("SYSTEM_DEPLOYMENT", "系统部署系", "PRODUCTION_DEBUG", "产线联调"),
+PROJECT_SKILL_NODES: list[tuple[str, str]] = [
+    ("光学成像系", "光源选型"),
+    ("光学成像系", "相机选型"),
+    ("光学成像系", "引脚缺陷检测"),
+    ("传统算法系", "图像滤波"),
+    ("传统算法系", "边缘检测"),
+    ("深度学习系", "模型训练"),
+    ("深度学习系", "模型调优"),
+    ("系统部署系", "产线联调"),
 ]
 
 # --------------------------------------------------------------- 七个模块的引导子标题
 #: 每个子标题都带一句**简介（prompt）**：学生端项目详情页在子标题下直接展示它，
 #: 告诉他这一栏该写什么。子标题由教师手填（模块库不预设），这里给案例项目写全。
 STAGE_GUIDES: dict[str, list[dict[str, str]]] = {
-    "REQUIREMENT_ANALYSIS": [
+    "需求分析": [
         {"title": "检测对象与封装规格", "prompt": "写清工件名称、封装形式、材质与关键尺寸"},
         {"title": "缺陷类型与量化判定标准", "prompt": "逐类列出要检的缺陷，并给出可量化的判定标准"},
         {"title": "节拍与产能约束", "prompt": "产线节拍、单件允许的检测耗时与班次产能"},
@@ -74,7 +74,7 @@ STAGE_GUIDES: dict[str, list[dict[str, str]]] = {
         {"title": "现场环境与产线对接", "prompt": "安装空间、光照干扰、现有 PLC/上位机接口"},
         {"title": "需求确认与风险提示", "prompt": "与需求方确认的结论，以及尚存的不确定项"},
     ],
-    "SOLUTION_DESIGN": [
+    "方案设计": [
         {"title": "可行性评估结论", "prompt": "现有条件下能否做到，结论与依据"},
         {"title": "相机选型与分辨率推导", "prompt": "面阵/线阵选择，按最小缺陷尺寸推导所需分辨率"},
         {"title": "镜头选型与工作距离", "prompt": "焦距、视野、工作距离与景深的核算过程"},
@@ -82,33 +82,33 @@ STAGE_GUIDES: dict[str, list[dict[str, str]]] = {
         {"title": "算法路线选型", "prompt": "传统算法与深度学习的取舍，以及选定的检测流程"},
         {"title": "软件功能设计", "prompt": "采集、推理、结果输出与界面功能划分"},
     ],
-    "DATA_PROCESSING": [
+    "数据处理": [
         {"title": "样品收集与分类", "prompt": "采集样本数量、类别分布与正负样本比例"},
         {"title": "数据集划分", "prompt": "训练/验证/测试集的划分方式与比例"},
         {"title": "标注规范", "prompt": "标注框规则、边界处理与质检方式"},
         {"title": "数据增强策略", "prompt": "常采用的几何/光照增强手段与参数"},
         {"title": "数据版本管理", "prompt": "数据集版本命名与变更记录方式"},
     ],
-    "MODEL_TRAINING": [
+    "模型训练": [
         {"title": "模型结构设计", "prompt": "选用的网络结构、输入尺寸与输出形式"},
         {"title": "训练环境与超参", "prompt": "硬件、框架版本、学习率与批大小等配置"},
         {"title": "训练过程与收敛", "prompt": "训练轮次、loss 曲线与收敛判断依据"},
         {"title": "指标监控", "prompt": "训练中关注的关键指标与早停条件"},
     ],
-    "MODEL_OPTIMIZATION": [
+    "模型优化": [
         {"title": "推理耗时优化", "prompt": "单帧推理耗时与采取的加速手段"},
         {"title": "漏检与误检优化", "prompt": "针对哪类错误、用了什么优化手段、效果如何"},
         {"title": "模型轻量化", "prompt": "剪枝/量化/蒸馏的取舍与精度损失"},
         {"title": "阈值与后处理调优", "prompt": "置信度阈值、NMS 参数与形态学后处理"},
     ],
-    "MODEL_TESTING": [
+    "模型测试": [
         {"title": "测试集与测试方法", "prompt": "测试集构成、测试条件与执行方式"},
         {"title": "检出能力（召回）", "prompt": "各类缺陷的召回率与典型漏检样本"},
         {"title": "抗干扰能力（精确率）", "prompt": "误检率与光照/姿态变化的鲁棒性验证"},
         {"title": "节拍与稳定性", "prompt": "连续运行下的耗时波动与稳定性结论"},
         {"title": "遗留风险", "prompt": "尚未解决的问题与对交付的影响"},
     ],
-    "REPORT_UPLOAD": [
+    "实训报告上传": [
         {"title": "报告文件", "prompt": "上传完整实训报告（含过程记录与实验数据）"},
         {"title": "关键结论摘要", "prompt": "用一段话总结最终方案与达成指标"},
     ],
@@ -210,7 +210,7 @@ REPORT_TEMPLATE_MD = """# 视觉检测项目实训报告（模板）
 # --------------------------------------------------------------- 学生作答（按子标题逐项）
 
 ANSWERS: dict[str, list[tuple[str, str]]] = {
-    "REQUIREMENT_ANALYSIS": [
+    "需求分析": [
         (
             "检测对象与封装规格",
             "TO-220 直插封装三端稳压器，3 根引出引脚，封装顶部带 Φ4.5mm 散热固定安装圆孔。"
@@ -251,7 +251,7 @@ ANSWERS: dict[str, list[tuple[str, str]]] = {
             "需补采样品或使用缺陷生成算法补足，否则模型泛化能力无法保证。",
         ),
     ],
-    "SOLUTION_DESIGN": [
+    "方案设计": [
         (
             "可行性评估结论",
             "本项目属检测类。客户明确“漏检优先”，与 ≤0.03% 漏检目标一致。"
@@ -295,7 +295,7 @@ ANSWERS: dict[str, list[tuple[str, str]]] = {
             "NG 原图按缺陷类型自动分类存储 ≥30 天；输出三类开关量信号对接分选机构。",
         ),
     ],
-    "DATA_PROCESSING": [
+    "数据处理": [
         (
             "样品收集与分类",
             "客户仅提供 3 张实拍样品图，远低于 OK ≥50、NG ≥30 的基线，故补采："
@@ -324,7 +324,7 @@ ANSWERS: dict[str, list[tuple[str, str]]] = {
             "数据集冻结为 v1.0，图像清单与标注文件做哈希校验，训练配置与数据集版本一一对应，保证实验可复现。",
         ),
     ],
-    "MODEL_TRAINING": [
+    "模型训练": [
         (
             "模型结构设计",
             "两级串联：第一级轻量化目标检测网络定位三根引脚的包围框；"
@@ -348,7 +348,7 @@ ANSWERS: dict[str, list[tuple[str, str]]] = {
             "同时记录单张推理耗时，提前发现节拍风险。",
         ),
     ],
-    "MODEL_OPTIMIZATION": [
+    "模型优化": [
         (
             "推理耗时优化",
             "原模型单张推理 38ms，占用预算偏高。采用 TensorRT FP16 量化与算子融合后降至 21ms；"
@@ -372,7 +372,7 @@ ANSWERS: dict[str, list[tuple[str, str]]] = {
             "增加规则兜底：引脚数量不足 3 根直接判断脚。",
         ),
     ],
-    "MODEL_TESTING": [
+    "模型测试": [
         (
             "测试集与测试方法",
             "使用隔离的测试集 30 个样品（OK 10 / 歪脚 10 / 断脚 10），"
@@ -400,7 +400,7 @@ ANSWERS: dict[str, list[tuple[str, str]]] = {
             "4) 光照老化后的长期稳定性缺少数据支撑。",
         ),
     ],
-    "REPORT_UPLOAD": [
+    "实训报告上传": [
         (
             "报告文件",
             "按项目报告模板编写，正文见附件《三端稳压管引脚缺陷检测实训报告.md》。",
@@ -569,27 +569,27 @@ async def _ensure_job(client: httpx.AsyncClient, *, job_name: str) -> dict:
 
 
 async def _ensure_skill_nodes(client: httpx.AsyncClient) -> list[dict]:
-    """按 code 找技能节点；技能树或节点缺失就补建，返回节点列表。"""
-    trees = {item["tree_code"]: item for item in await _page_of(client, "/api/skill-trees")}
+    """按名字找技能节点；技能树或节点缺失就补建，返回节点列表。"""
+    trees = {item["tree_name"]: item for item in await _page_of(client, "/api/skill-trees")}
     nodes: list[dict] = []
-    for tree_code, tree_name, node_code, node_name in PROJECT_SKILL_NODES:
-        tree = trees.get(tree_code)
+    for tree_name, node_name in PROJECT_SKILL_NODES:
+        tree = trees.get(tree_name)
         if tree is None:
             tree = await call(
                 client,
                 "post",
                 "/api/skill-trees",
-                json={"tree_code": tree_code, "tree_name": tree_name},
+                json={"tree_name": tree_name},
             )
-            trees[tree_code] = tree
+            trees[tree_name] = tree
         siblings = await call(client, "get", f"/api/skill-trees/{tree['id']}/nodes")
-        node = next((item for item in siblings if item["node_code"] == node_code), None)
+        node = next((item for item in siblings if item["node_name"] == node_name), None)
         if node is None:
             node = await call(
                 client,
                 "post",
                 f"/api/skill-trees/{tree['id']}/nodes",
-                json={"node_code": node_code, "node_name": node_name},
+                json={"node_name": node_name},
             )
         nodes.append(node)
     return nodes
@@ -645,7 +645,7 @@ async def run(*, user_no: str, project_name: str, run_review: bool) -> None:
 
 async def _seed(client: httpx.AsyncClient, *, user_no: str, project_name: str, run_review: bool) -> None:
     templates = {
-        item["stage_key"]: item for item in (await call(client, "get", "/api/stage-templates"))["items"]
+        item["stage_name"]: item for item in (await call(client, "get", "/api/stage-templates"))["items"]
     }
     missing = [key for key in STAGE_GUIDES if key not in templates]
     if missing:
@@ -761,7 +761,7 @@ async def _seed(client: httpx.AsyncClient, *, user_no: str, project_name: str, r
 
     # 逐关卡按引导子标题填写作答
     for stage in attempt["stages"]:
-        key = stage["stage_key"]
+        key = stage["stage_name"]
         sections = ANSWERS.get(key)
         if not sections:
             continue
@@ -773,11 +773,13 @@ async def _seed(client: httpx.AsyncClient, *, user_no: str, project_name: str, r
         )
     print(
         "[7/9] 七关作答已填写："
-        + "、".join(f"{s['stage_name']}({len(ANSWERS.get(s['stage_key'], []))}项)" for s in attempt["stages"])
+        + "、".join(
+            f"{s['stage_name']}({len(ANSWERS.get(s['stage_name'], []))}项)" for s in attempt["stages"]
+        )
     )
 
     # 实训报告：以纯文本文件作为附件挂到"实训报告上传"关卡
-    report_stage = next(s for s in attempt["stages"] if s["stage_key"] == "REPORT_UPLOAD")
+    report_stage = next(s for s in attempt["stages"] if s["stage_name"] == "实训报告上传")
     asset = await call(
         client,
         "post",

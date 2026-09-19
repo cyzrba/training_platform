@@ -17,9 +17,9 @@ from sqlalchemy import text  # noqa: E402
 from app.core.config import settings  # noqa: E402
 from app.core.db import engine  # noqa: E402
 
-EXPECTED_TABLES = 39  # 38 张业务表 + project_file（项目附件）
-EXPECTED_INDEXES = 35
-EXPECTED_FOREIGN_KEYS = 60
+EXPECTED_TABLES = 44  # 40 张业务表 + J 域任务下发 4 张（publish_task*）
+EXPECTED_INDEXES = 41
+EXPECTED_FOREIGN_KEYS = 68
 
 
 def sqlite_stats(db_file: Path) -> dict[str, int]:

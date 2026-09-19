@@ -2,12 +2,20 @@
 
 规则（按评审确认）：
 1. 表头必须是模板列名；学号、姓名为必填列；
-2. 文件内学号重复、学号已存在、姓名为空 —— 任一命中即整批拒绝并返回逐行原因；
-3. 校验通过后，建学生账号（默认密码）→ 入班。
+2. 文件内学号重复、姓名为空 —— 任一命中即整批拒绝并返回逐行原因；
+3. **学号在库里已存在**默认也按错误处理（这条是给"建新号"用的）；换老师 / 转班这类
+   "学生账号已经有了、只是要重新入班"的场景，要显式传 ``reuse_existing=True``：
+   账号直接复用，只补在班记录（可选按名单里的分组序号分组），不会重建账号、更不会碰
+   ``student_project`` 等学习记录（进度、成绩、提交历史都跟着学生走）；
+4. 校验通过后，建学生账号（默认密码）→ 入班。
 
 分组：模板里**不含**分组序号列（教师流程是建班 → 导名单 → 再建分组 → 再加学生）。
 如果历史文件带了「分组序号」列，仍然认：该分组已存在就顺手分进去，还没建就忽略并在
 结果里计入 ``ignored_group_hints``，不会因为分组不存在而整批失败。
+
+「学号已存在」默认是错误（防止把同一个班的花名册重复导一遍）；**换老师 / 转班**这类场景
+要的是"复用已有账号再入新班"，调接口时带 ``reuse_existing=true``：这时已存在的学号不再报错，
+账号原样复用（成绩、闯关记录、技能进度都跟着账号走），只是多一条新班的在班记录。
 """
 
 from dataclasses import dataclass
@@ -27,6 +35,7 @@ from app.models.account import SysUser
 from app.models.organization import ClassGroup
 from app.schemas.organization import StudentImportError, StudentImportResult
 from app.services.password import default_password_hash
+from app.services.skill import refresh_student_skills
 
 #: 导入模板的表头（第一行）与对应字段
 TEMPLATE_FIELDS: dict[str, str] = {
@@ -130,8 +139,9 @@ def validate_students(
     rows: list[StudentRow],
     *,
     existing_user_nos: set[str],
+    allow_existing: bool = False,
 ) -> list[StudentImportError]:
-    """整批校验：文件内学号重复、必填缺失、学号已存在。"""
+    """整批校验：文件内学号重复、必填缺失、学号已存在（``allow_existing=True`` 时不拦）。"""
     errors: list[StudentImportError] = []
     seen: dict[str, int] = {}
 
@@ -153,13 +163,16 @@ def validate_students(
                 )
             )
 
-    for row in rows:
-        if row.user_no and row.user_no in existing_user_nos:
-            errors.append(
-                StudentImportError(
-                    row=row.row_no, user_no=row.user_no, reason=f"学号 {row.user_no} 已存在，未导入"
+    if not allow_existing:
+        for row in rows:
+            if row.user_no and row.user_no in existing_user_nos:
+                errors.append(
+                    StudentImportError(
+                        row=row.row_no,
+                        user_no=row.user_no,
+                        reason=f"学号 {row.user_no} 已存在，未导入",
+                    )
                 )
-            )
     return errors
 
 
@@ -227,12 +240,11 @@ async def import_students(
                     {"class_id": class_id, "student_id": student.id, "status": "ENROLLED"}
                 )
 
-            if row.group_no is None:
-                continue
-            group = class_groups.get(row.group_no)
-            if group is None:
-                continue
-            await memberships.set_group(enrollment.id, group.id)
+            group = class_groups.get(row.group_no) if row.group_no is not None else None
+            if group is not None:
+                await memberships.set_group(enrollment.id, group.id)
+            # 入班 / 分组 → 分母可能变了 → 重算已有记录的技能进度（见 docs/方案设计.md §12）
+            await refresh_student_skills(session, student.id)
 
     return StudentImportResult(
         dry_run=dry_run,

@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlmodel import func, or_, select
 
+from app.core.time import now
 from app.crud.base import BaseRepository
 from app.models.attempt import (
     AttemptStage,
@@ -12,6 +13,7 @@ from app.models.attempt import (
     FileAsset,
     ProjectSubmission,
     StudentProject,
+    StudentProjectPick,
     TrainingAttempt,
 )
 from app.models.project import TrainingProject
@@ -25,6 +27,26 @@ class StudentProjectRepository(BaseRepository[StudentProject]):
 
     async def by_student_project(self, student_id: int, project_id: int) -> StudentProject | None:
         return await self.get_by(student_id=student_id, project_id=project_id)
+
+    async def pairs_of(
+        self, student_ids: Sequence[int], project_ids: Sequence[int]
+    ) -> dict[tuple[int, int], StudentProject]:
+        """批量取"学生 × 项目"的实训记录，键是 ``(student_id, project_id)``。
+
+        教师工作台统计任务完成度时，一次把这批记录捞回来，避免按学生对逐条查。
+        """
+        students = list(dict.fromkeys(int(sid) for sid in student_ids))
+        projects = list(dict.fromkeys(int(pid) for pid in project_ids))
+        if not students or not projects:
+            return {}
+        stmt = select(StudentProject).where(
+            StudentProject.student_id.in_(students),  # type: ignore[attr-defined]
+            StudentProject.project_id.in_(projects),  # type: ignore[attr-defined]
+        )
+        return {
+            (int(record.student_id), int(record.project_id)): record
+            for record in (await self.session.exec(stmt)).all()
+        }
 
     async def list_records(
         self,
@@ -71,6 +93,60 @@ class StudentProjectRepository(BaseRepository[StudentProject]):
             for record, project in rows
         ]
         return Page.build(items=items, total=total, params=params)
+
+
+class StudentProjectPickRepository(BaseRepository[StudentProjectPick]):
+    """「我的实训」清单仓储：学生自己挑的项目（关系表，移除即删行）。"""
+
+    model = StudentProjectPick
+
+    async def list_of_student(self, student_id: int) -> list[StudentProjectPick]:
+        stmt = (
+            select(StudentProjectPick)
+            .where(StudentProjectPick.student_id == student_id)
+            .order_by(StudentProjectPick.id)
+        )
+        return list((await self.session.exec(stmt)).all())
+
+    async def by_student_project(self, student_id: int, project_id: int) -> StudentProjectPick | None:
+        return await self.get_by(student_id=student_id, project_id=project_id)
+
+    async def add_projects(self, student_id: int, project_ids: Sequence[int]) -> int:
+        """批量加入（已经加过的跳过），返回真正新增的条数。"""
+        existing = {int(row.project_id) for row in await self.list_of_student(student_id)}
+        created = 0
+        for project_id in dict.fromkeys(int(pid) for pid in project_ids):
+            if project_id in existing:
+                continue
+            await self.create({"student_id": student_id, "project_id": project_id})
+            created += 1
+        return created
+
+    async def remove_project(self, student_id: int, project_id: int) -> bool:
+        """把项目移出「我的实训」；本来就不在清单里返回 False（幂等）。"""
+        row = await self.by_student_project(student_id, project_id)
+        if row is None:
+            return False
+        await self.session.delete(row)
+        await self.session.flush()
+        return True
+
+    async def reorder(self, student_id: int, ordered_ids: Sequence[int]) -> list[int]:
+        """按传入顺序写 sort_no（1..N，覆盖式）；不在清单里的 ID 忽略。
+
+        返回清单里找不到的 ID，方便接口回 422 而不是悄悄吞掉前端传错的值。
+        """
+        rows = {int(row.project_id): row for row in await self.list_of_student(student_id)}
+        missing: list[int] = []
+        for index, project_id in enumerate(dict.fromkeys(int(pid) for pid in ordered_ids), start=1):
+            row = rows.get(project_id)
+            if row is None:
+                missing.append(project_id)
+                continue
+            row.sort_no = index
+            row.updated_at = now()
+        await self.session.flush()
+        return missing
 
 
 class TrainingAttemptRepository(BaseRepository[TrainingAttempt]):
@@ -250,6 +326,7 @@ __all__ = [
     "AttemptStageRepository",
     "FileAssetRepository",
     "ProjectSubmissionRepository",
+    "StudentProjectPickRepository",
     "StudentProjectRepository",
     "TrainingAttemptRepository",
 ]

@@ -63,49 +63,42 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
 #: 七大标准实训模块（需求确认书 2.2「标准化实训模块配置」）
 STAGE_TEMPLATES: list[dict[str, Any]] = [
     {
-        "stage_key": "REQUIREMENT_ANALYSIS",
         "stage_name": "需求分析",
         "description": "明确任务目标、输入输出与约束条件",
         "default_weight": Decimal("10"),
         "sort_no": 1,
     },
     {
-        "stage_key": "SOLUTION_DESIGN",
         "stage_name": "方案设计",
         "description": "给出技术路线、模型/算法选型与整体方案",
         "default_weight": Decimal("15"),
         "sort_no": 2,
     },
     {
-        "stage_key": "DATA_PROCESSING",
         "stage_name": "数据处理",
         "description": "数据采集、清洗、标注与数据集构建",
         "default_weight": Decimal("15"),
         "sort_no": 3,
     },
     {
-        "stage_key": "MODEL_TRAINING",
         "stage_name": "模型训练",
         "description": "训练环境搭建、参数配置与模型训练",
         "default_weight": Decimal("20"),
         "sort_no": 4,
     },
     {
-        "stage_key": "MODEL_OPTIMIZATION",
         "stage_name": "模型优化",
         "description": "调参、蒸馏、剪枝等性能与精度优化",
         "default_weight": Decimal("15"),
         "sort_no": 5,
     },
     {
-        "stage_key": "MODEL_TESTING",
         "stage_name": "模型测试",
         "description": "指标评测、对比实验与问题分析",
         "default_weight": Decimal("15"),
         "sort_no": 6,
     },
     {
-        "stage_key": "REPORT_UPLOAD",
         "stage_name": "实训报告上传",
         "description": "整理过程记录与结论，上传实训报告及附件",
         "default_weight": Decimal("10"),
@@ -116,22 +109,18 @@ STAGE_TEMPLATES: list[dict[str, Any]] = [
 #: 技能树四大体系（需求确认书 2.3「技能树」）
 SKILL_TREES: list[dict[str, str]] = [
     {
-        "tree_code": "OPTICAL_IMAGING",
         "tree_name": "光学成像系",
         "description": "光源、镜头、相机选型与成像调优",
     },
     {
-        "tree_code": "TRADITIONAL_ALGORITHM",
         "tree_name": "传统算法系",
         "description": "图像预处理、特征提取与形态学处理",
     },
     {
-        "tree_code": "DEEP_LEARNING",
         "tree_name": "深度学习系",
         "description": "检测、分割、分类模型的训练与优化",
     },
     {
-        "tree_code": "SYSTEM_DEPLOYMENT",
         "tree_name": "系统部署系",
         "description": "模型部署、产线联调与工程化交付",
     },
@@ -350,13 +339,12 @@ async def run_seed(session: AsyncSession | None = None) -> dict[str, int]:
                 session,
                 ProjectStageTemplate,
                 {
-                    "stage_name": item["stage_name"],
                     "description": item["description"],
                     "default_required": True,
                     "default_weight": item["default_weight"],
                     "sort_no": item["sort_no"],
                 },
-                stage_key=item["stage_key"],
+                stage_name=item["stage_name"],
             )
             stats["stage_templates"] += int(created)
 
@@ -364,8 +352,8 @@ async def run_seed(session: AsyncSession | None = None) -> dict[str, int]:
             _, created = await _get_or_create(
                 session,
                 SkillTree,
-                {"tree_name": item["tree_name"], "description": item["description"]},
-                tree_code=item["tree_code"],
+                {"description": item["description"]},
+                tree_name=item["tree_name"],
             )
             stats["skill_trees"] += int(created)
 

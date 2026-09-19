@@ -62,6 +62,28 @@ class ProjectStatus(StrEnum):
     OFF_SHELF = "OFF_SHELF"  # 已下架
 
 
+class PublishMode(StrEnum):
+    """发布任务的发布方式。"""
+
+    IMMEDIATE = "IMMEDIATE"  # 即时发布，创建即生效
+    SCHEDULED = "SCHEDULED"  # 定时发布，到 scheduled_at 生效
+
+
+class PublishTaskStatus(StrEnum):
+    """发布任务状态。"""
+
+    PENDING = "PENDING"  # 待发布（含已排期的定时任务）：还没点名，学生看不到这条任务
+    PUBLISHED = "PUBLISHED"  # 已发布：任务清单里能看到，名单里的项目对学生是必修
+    CANCELLED = "CANCELLED"  # 已撤回：不再点名（项目本身照旧开放，学生还能做）
+
+
+class PublishTargetType(StrEnum):
+    """发布任务的目标类型。"""
+
+    CLASS = "CLASS"  # 全班
+    GROUP = "GROUP"  # 指定分组
+
+
 class StudentProjectStatus(StrEnum):
     """学生实训记录状态（学生 × 项目的闯关进度）。"""
 
@@ -299,6 +321,24 @@ ENUM_DICTS: tuple[EnumDict, ...] = (
         "实训项目状态",
         ProjectStatus,
         {"DRAFT": "草稿", "PUBLISHED": "已发布", "OFF_SHELF": "已下架"},
+    ),
+    _enum_dict(
+        "publish_mode",
+        "发布方式",
+        PublishMode,
+        {"IMMEDIATE": "即时发布", "SCHEDULED": "定时发布"},
+    ),
+    _enum_dict(
+        "publish_task_status",
+        "发布任务状态",
+        PublishTaskStatus,
+        {"PENDING": "待发布", "PUBLISHED": "已发布", "CANCELLED": "已撤回"},
+    ),
+    _enum_dict(
+        "publish_target_type",
+        "发布目标类型",
+        PublishTargetType,
+        {"CLASS": "全班", "GROUP": "指定分组"},
     ),
     _enum_dict(
         "student_project_status",

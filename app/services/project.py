@@ -15,7 +15,7 @@ async def build_module_details(
     modules: list[ProjectModule],
     templates: StageTemplateRepository,
 ) -> list[ProjectModuleDetail]:
-    """把项目模块拼成带模板信息的明细（关卡名称/编码统一读模块库）。"""
+    """把项目模块拼成带模板信息的明细（关卡名称统一读模块库）。"""
     template_map = {
         template.id: template
         for template in await templates.list_by_ids(
@@ -30,7 +30,6 @@ async def build_module_details(
         details.append(
             ProjectModuleDetail(
                 **module.model_dump(),
-                stage_key=template.stage_key,
                 stage_name=template.stage_name,
                 default_weight=template.default_weight,
             )

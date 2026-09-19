@@ -17,6 +17,7 @@ from app.core.exceptions import BusinessRuleError
 from app.models.attempt import ProjectSubmission
 from app.services import ai_review, settings_store
 from app.services.ai_review import StageAnswer, StageAttachment, SubmissionContext
+from tests import helpers
 
 #: 测试用的大模型配置：key 是假的，真实调用一律被 monkeypatch 掉
 TEST_LLM_CONFIG = settings_store.LLMConfig(
@@ -216,7 +217,7 @@ async def _build_many_chunk_doc(client: httpx.AsyncClient, project_name: str) ->
         template = (
             await client.post(
                 "/api/stage-templates",
-                json={"stage_key": f"{project_name}-{order}", "stage_name": name},
+                json={"stage_name": name},
             )
         ).json()
         await client.post(
@@ -224,6 +225,7 @@ async def _build_many_chunk_doc(client: httpx.AsyncClient, project_name: str) ->
             json={"template_id": template["id"], "stage_no": order, "weight": weight},
         )
     await client.patch(f"/api/projects/{project['id']}", json={"status": "PUBLISHED"})
+    await helpers.publish(client, [project["id"]])
     uploaded = (
         await client.post(
             f"/api/projects/{project['id']}/files/upload",
@@ -241,6 +243,7 @@ async def _submit_all_stages(client: httpx.AsyncClient, project: dict, *, user_n
             "/api/users", json={"user_no": user_no, "real_name": "长标准学生", "user_type": "STUDENT"}
         )
     ).json()
+    await helpers.enroll(client, user_no)
     attempt = (await client.post(f"/api/students/{student['id']}/projects/{project['id']}/start")).json()
     for stage in attempt["stages"]:
         await client.patch(
@@ -313,7 +316,7 @@ async def _criteria_project(client: httpx.AsyncClient, name: str) -> tuple[dict,
     template = (
         await client.post(
             "/api/stage-templates",
-            json={"stage_key": f"{name}-REQ", "stage_name": "需求分析"},
+            json={"stage_name": "需求分析"},
         )
     ).json()
     project = (
@@ -324,6 +327,7 @@ async def _criteria_project(client: httpx.AsyncClient, name: str) -> tuple[dict,
         json={"template_id": template["id"], "weight": 100},
     )
     await client.patch(f"/api/projects/{project['id']}", json={"status": "PUBLISHED"})
+    await helpers.publish(client, [project["id"]])
     uploaded = (
         await client.post(
             f"/api/projects/{project['id']}/files/upload",
@@ -342,6 +346,7 @@ async def _submitted_attempt(client: httpx.AsyncClient, project: dict, *, user_n
             "/api/users", json={"user_no": user_no, "real_name": "李四", "user_type": "STUDENT"}
         )
     ).json()
+    await helpers.enroll(client, user_no)
     attempt = (await client.post(f"/api/students/{student['id']}/projects/{project['id']}/start")).json()
     await client.patch(
         f"/api/attempts/{attempt['id']}/stages/{attempt['stages'][0]['id']}",
@@ -494,9 +499,7 @@ async def test_ai_review_end_to_end_writes_record(
 @pytest.mark.asyncio
 async def test_ai_review_requires_criteria(client: httpx.AsyncClient) -> None:
     """项目没传评分标准时给出可读提示，而不是让模型瞎猜。"""
-    template = (
-        await client.post("/api/stage-templates", json={"stage_key": "NOCRI-REQ", "stage_name": "需求分析"})
-    ).json()
+    template = (await client.post("/api/stage-templates", json={"stage_name": "需求分析"})).json()
     project = (
         await client.post("/api/projects", json={"project_name": "没有评分标准", "project_level": "BASIC"})
     ).json()
@@ -505,6 +508,7 @@ async def test_ai_review_requires_criteria(client: httpx.AsyncClient) -> None:
         json={"template_id": template["id"], "weight": 100},
     )
     await client.patch(f"/api/projects/{project['id']}", json={"status": "PUBLISHED"})
+    await helpers.publish(client, [project["id"]])
     submission = await _submitted_attempt(client, project, user_no="2026101")
 
     response = await client.post(f"/api/submissions/{submission['id']}/ai-review")

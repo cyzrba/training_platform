@@ -30,6 +30,7 @@ from app.db.seed_demo import (
     PROJECTS,
     SKILL_NODES,
     STUDENT_PROJECT_PLAN,
+    TASKS,
     TEACHERS,
     run_demo_seed,
 )
@@ -57,7 +58,7 @@ async def test_demo_seed_counts_and_idempotency(db_session) -> None:
     assert first["stage_templates"] == 7  # 同上：完整库里这里是 0
     assert first["skill_nodes"] == sum(len(nodes) for nodes in SKILL_NODES.values())
     assert first["jobs"] == len(JOBS)
-    assert first["job_skills"] == sum(len(job["skill_codes"]) for job in JOBS)
+    assert first["job_skills"] == sum(len(job["skill_names"]) for job in JOBS)
     assert first["student_jobs"] >= expected_students
     assert first["projects"] == len(PROJECTS)
     assert first["project_modules"] == sum(len(item["modules"]) for item in PROJECTS)
@@ -75,6 +76,11 @@ async def test_demo_seed_counts_and_idempotency(db_session) -> None:
     )
     assert first["student_skills"] > 0
     assert first["project_files"] == sum(len(files) for files in PROJECT_FILES.values())
+    # 任务下发：学生端能看到项目，靠的就是这些任务
+    assert first["publish_tasks"] == len(TASKS)
+    assert first["publish_task_targets"] == sum(len(item["class_names"]) for item in TASKS)
+    assert first["publish_task_jobs"] == sum(len(item["job_names"]) for item in TASKS)
+    assert first["publish_task_projects"] == sum(len(item["project_names"]) for item in TASKS)
 
     second = await run_demo_seed(db_session)
     assert second == dict.fromkeys(second, 0), "重复执行不应再新增数据"
@@ -103,8 +109,8 @@ async def test_demo_seed_counts_and_idempotency(db_session) -> None:
     for item in JOBS:
         job = await jobs.by_name(item["job_name"])
         assert job is not None
-        assert await job_skills.count_of_job(job.id) == len(item["skill_codes"])
-    assert await nodes.by_code("IMG_BASE") is not None
+        assert await job_skills.count_of_job(job.id) == len(item["skill_names"])
+    assert await nodes.by_name("图像基础") is not None
 
 
 @pytest.mark.asyncio
@@ -161,11 +167,11 @@ async def test_demo_seed_projects(db_session) -> None:
 
     # 项目所需技能：对齐岗位技能，且都是模块库/技能树里真实存在的节点
     project_skills = ProjectSkillRepository(db_session)
-    for project_name, node_codes in PROJECT_SKILLS.items():
+    for project_name, node_names in PROJECT_SKILLS.items():
         project = await projects.by_name(project_name)
         assert project is not None
         nodes = await project_skills.list_nodes_of_project(project.id)
-        assert {node.node_code for node in nodes} == set(node_codes)
+        assert {node.node_name for node in nodes} == set(node_names)
 
 
 @pytest.mark.asyncio
@@ -184,12 +190,12 @@ async def test_demo_seed_stage_items(db_session) -> None:
         assert project is not None
         items = await modules.list_of_project(project.id)
         assert len(items) == len(project_item["modules"])
-        for module, (stage_key, _, _) in zip(items, project_item["modules"], strict=True):
-            expected = PROJECT_MODULE_ITEMS[(project_item["project_name"], stage_key)]
+        for module, (stage_name, _, _) in zip(items, project_item["modules"], strict=True):
+            expected = PROJECT_MODULE_ITEMS[(project_item["project_name"], stage_name)]
             assert [item["title"] for item in module.items_json] == [item["title"] for item in expected]
 
     # 同一个"需求分析"模板，在检测类和分类类项目里的子标题不同
-    requirement_template = await templates.by_key("REQUIREMENT_ANALYSIS")
+    requirement_template = await templates.by_name("需求分析")
     assert requirement_template is not None
     first = await projects.by_name("工业缺陷检测实训")
     second = await projects.by_name("表面缺陷分类进阶")

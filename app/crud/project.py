@@ -21,20 +21,15 @@ class StageTemplateRepository(BaseRepository[ProjectStageTemplate]):
         filters: list[Any] = []
         if keyword and keyword.strip():
             pattern = f"%{keyword.strip()}%"
-            filters.append(
-                or_(
-                    ProjectStageTemplate.stage_name.like(pattern),
-                    ProjectStageTemplate.stage_key.like(pattern),
-                )
-            )
+            filters.append(ProjectStageTemplate.stage_name.like(pattern))
         return await self.list_page(params, *filters, order_by=ProjectStageTemplate.sort_no)
 
-    async def by_key(self, stage_key: str) -> ProjectStageTemplate | None:
-        return await self.get_by(stage_key=stage_key)
+    async def by_name(self, stage_name: str) -> ProjectStageTemplate | None:
+        return await self.get_by(stage_name=stage_name)
 
-    async def by_key_including_deleted(self, stage_key: str) -> ProjectStageTemplate | None:
-        """含已软删的条目：重新新增同一个编码时用来恢复。"""
-        stmt = select(ProjectStageTemplate).where(ProjectStageTemplate.stage_key == stage_key)
+    async def by_name_including_deleted(self, stage_name: str) -> ProjectStageTemplate | None:
+        """含已软删的条目：重新新增同一个名称时用来恢复。"""
+        stmt = select(ProjectStageTemplate).where(ProjectStageTemplate.stage_name == stage_name)
         return (await self.session.exec(stmt)).first()
 
     async def restore(self, template: ProjectStageTemplate, data: dict[str, Any]) -> ProjectStageTemplate:

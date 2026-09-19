@@ -1,4 +1,4 @@
-"""闯关过程：文件、学生实训记录、闯关轮次、模块作答、整单提交。"""
+"""闯关过程：文件、学生实训记录、我的实训清单、闯关轮次、模块作答、整单提交。"""
 
 from datetime import datetime
 from decimal import Decimal
@@ -66,6 +66,32 @@ class StudentProject(Base, TimestampMixin, StudentProjectBase, table=True):
         UniqueConstraint("student_id", "project_id", name="uk_student_project"),
         Index("idx_student_project_student", "student_id", "status"),
         Index("idx_student_project_project", "project_id"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+
+
+# ------------------------------------------------------------- 我的实训清单
+
+
+class StudentProjectPickBase(SQLModel):
+    student_id: int = Field(foreign_key="sys_user.id", description="学生 ID")
+    project_id: int = Field(foreign_key="training_project.id", description="项目 ID")
+    sort_no: int = Field(default=0, description="学生自定义排序（越小越靠前，0 = 还没排过）")
+
+
+class StudentProjectPick(Base, TimestampMixin, StudentProjectPickBase, table=True):
+    """「我的实训」清单：学生从项目库里自己挑进来的项目。
+
+    只记"学生主动挑的"这一件事：老师发任务点名（必修）**不写这张表**，展示时实时并集
+    （见 ``app/services/student_overview.py::my_projects``），所以任务撤回 / 转班 / 删班
+    都不需要同步这张表。关系表，不做软删，移除即删行。
+    """
+
+    __tablename__ = "student_project_pick"
+    __table_args__ = (
+        UniqueConstraint("student_id", "project_id", name="uk_student_project_pick"),
+        Index("idx_student_project_pick_project", "project_id"),
     )
 
     id: int | None = Field(default=None, primary_key=True)

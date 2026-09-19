@@ -49,7 +49,6 @@ class ProjectStageTemplateCreate(ProjectStageTemplateBase):
 
 
 class ProjectStageTemplateUpdate(SQLModel):
-    stage_key: str | None = Field(default=None, max_length=50)
     stage_name: str | None = Field(default=None, max_length=100)
     description: str | None = None
     default_required: bool | None = None
@@ -106,9 +105,8 @@ class ProjectModuleRead(TimestampRead, ProjectModuleBase):
 
 
 class ProjectModuleDetail(ProjectModuleRead):
-    """项目里的一个模块：带上模板里的名称与编码（关卡定义统一读模块库）。"""
+    """项目里的一个模块：带上模板里的名称（关卡定义统一读模块库）。"""
 
-    stage_key: str = Field(description="模块编码（取模板）")
     stage_name: str = Field(description="模块名称（取模板）")
     default_weight: Decimal = Field(default=Decimal(0), description="模板默认权重")
     items_json: list[StageItem] = Field(default_factory=list, description="本项目的填写引导子标题")

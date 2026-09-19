@@ -72,10 +72,8 @@ class ProjectSkillNodeItem(SQLModel):
     """项目关联的一个技能点（带所属技能树体系）。"""
 
     skill_node_id: int = Field(description="技能节点 ID")
-    node_code: str = Field(description="技能节点编码")
     node_name: str = Field(description="技能节点名称")
     tree_id: int = Field(description="所属技能树 ID")
-    tree_code: str | None = Field(default=None, description="所属技能树编码")
     tree_name: str | None = Field(default=None, description="所属技能树名称")
 
 
@@ -100,6 +98,21 @@ class StudentTrainingProject(SQLModel):
     progress: float = Field(default=0, description="关卡进度百分比 0~100 = 已填写关卡 ÷ 关卡总数")
     level_total: int = Field(default=0, description="关卡总数")
     level_done: int = Field(default=0, description="已完成关卡数（最新一轮闯关里已填写的关卡数）")
+    is_required: bool = Field(
+        default=False, description="是否必修：老师发任务点名要求该学生完成（自主练习同为一个项目，不冲突）"
+    )
+    required_task_ids: list[int] = Field(default_factory=list, description="点名要求该项目的任务 ID")
+    required_task_titles: list[str] = Field(default_factory=list, description="点名要求该项目的任务标题")
+    required_deadline_at: datetime | None = Field(
+        default=None, description="必修任务里最早的截止时间（没有截止时间时为空）"
+    )
+    picked: bool = Field(default=False, description="是否在学生自己的「我的实训」清单里（他主动挑的）")
+    picked_at: datetime | None = Field(default=None, description="加入「我的实训」的时间；没加过为空")
+    sort_no: int = Field(default=0, description="「我的实训」里的自定义排序（0 = 还没排过）")
+    sources: list[str] = Field(
+        default_factory=list,
+        description="为什么出现在这里：SELF 自己挑的 / TEACHER 老师点名必修，可同时存在",
+    )
     skill_nodes: list[ProjectSkillNodeItem] = Field(default_factory=list, description="关联的技能点")
 
 
@@ -147,7 +160,6 @@ class TrainingProjectLevelDetail(SQLModel):
         default=None, description="本轮该关卡的作答行 ID；用它调保存作答接口，未开始闯关时为空"
     )
     stage_no: int = Field(description="关卡顺序，从 1 开始")
-    stage_key: str | None = Field(default=None, description="关卡编码")
     stage_name: str = Field(description="关卡名称")
     description: str | None = Field(default=None, description="关卡简介（做什么）")
     requirement: str | None = Field(default=None, description="作答要求")
@@ -186,10 +198,42 @@ class StudentTrainingProjectDetail(SQLModel):
     )
     current_attempt_no: int | None = Field(default=None, description="当前（最新）轮次序号；还没开始时为空")
     submission_count: int = Field(default=0, description="历史提交次数")
+    is_required: bool = Field(
+        default=False, description="是否必修：老师发任务点名要求该学生完成（自主练习同为一个项目，不冲突）"
+    )
+    required_task_ids: list[int] = Field(default_factory=list, description="点名要求该项目的任务 ID")
+    required_task_titles: list[str] = Field(default_factory=list, description="点名要求该项目的任务标题")
+    required_deadline_at: datetime | None = Field(
+        default=None, description="必修任务里最早的截止时间（没有截止时间时为空）"
+    )
+    picked: bool = Field(default=False, description="是否在学生自己的「我的实训」清单里（他主动挑的）")
+    picked_at: datetime | None = Field(default=None, description="加入「我的实训」的时间；没加过为空")
+    sort_no: int = Field(default=0, description="「我的实训」里的自定义排序（0 = 还没排过）")
+    sources: list[str] = Field(
+        default_factory=list,
+        description="为什么出现在这里：SELF 自己挑的 / TEACHER 老师点名必修，可同时存在",
+    )
     skill_nodes: list[ProjectSkillNodeItem] = Field(default_factory=list, description="关联的技能点")
     levels: list[TrainingProjectLevelDetail] = Field(default_factory=list, description="关卡列表（含子标题）")
     submissions: list[ProjectSubmissionHistoryItem] = Field(
         default_factory=list, description="历史提交（按提交时间倒序，含评语）"
+    )
+
+
+# ------------------------------------------------------------ 「我的实训」入参
+
+
+class StudentProjectPickIn(SQLModel):
+    """把项目加进「我的实训」：批量、幂等（已经加过的跳过）。"""
+
+    project_ids: list[int] = Field(min_length=1, description="要加入的项目 ID 列表")
+
+
+class StudentProjectPickOrderIn(SQLModel):
+    """覆盖式调整「我的实训」里自己挑的项目的顺序。"""
+
+    project_ids: list[int] = Field(
+        min_length=1, description="自己挑的项目 ID，按目标顺序排列（只对自己加入的项目生效）"
     )
 
 
@@ -233,7 +277,6 @@ class AttemptStageDetail(AttemptStageRead):
     """模块作答：带上关卡信息（名称/顺序/是否必填/填写引导子标题）。"""
 
     stage_no: int = Field(description="关卡顺序")
-    stage_key: str | None = Field(default=None, description="关卡编码（取模块库）")
     stage_name: str | None = Field(default=None, description="关卡名称（取模块库）")
     required: bool = Field(default=True, description="是否必填")
     weight: Decimal = Field(default=Decimal(0), description="该关卡分值占比")
@@ -366,6 +409,8 @@ __all__ = [
     "AttemptDetail",
     "StudentProjectCreate",
     "StudentProjectDetail",
+    "StudentProjectPickIn",
+    "StudentProjectPickOrderIn",
     "StudentProjectRead",
     "StudentTrainingProject",
     "StudentTrainingProjectDetail",

@@ -43,6 +43,7 @@ from app.schemas.organization import (
     StudentImportResult,
 )
 from app.services.password import default_password_hash, hash_password
+from app.services.skill import refresh_student_skills
 from app.services.student_import import (
     build_template_xlsx,
     import_students,
@@ -191,9 +192,16 @@ async def update_class(class_id: int, payload: ClassInfoUpdate, classes: ClassRe
 
 
 @router.delete("/classes/{class_id}", response_model=ApiResponse[MessageOut], summary="归档删除班级（软删）")
-async def delete_class(class_id: int, classes: ClassRepo) -> MessageOut:
+async def delete_class(
+    class_id: int, db: DbSession, classes: ClassRepo, enrollments: ClassStudentRepo
+) -> MessageOut:
     classroom = await _class_or_404(classes, class_id)
+    student_ids = await enrollments.student_ids(class_id)
     await classes.remove(classroom)
+    # 班级删掉后，发给这个班的任务不再覆盖它的学生 → 分母变小 → 重算技能进度
+    # （学生换班 / 换老师场景里，"旧班撤掉、新班还没发任务"的空窗期靠这一步保持一致）
+    for student_id in student_ids:
+        await refresh_student_skills(db, student_id)
     return MessageOut(message="班级已删除")
 
 
@@ -313,6 +321,7 @@ async def list_group_students(
 async def add_group_students(
     group_id: int,
     payload: GroupMemberBatchIn,
+    db: DbSession,
     groups: GroupRepo,
     enrollments: ClassStudentRepo,
     memberships: StudentGroupRepo,
@@ -324,6 +333,8 @@ async def add_group_students(
         if enrollment.class_id != group.class_id:
             raise BusinessRuleError(f"在班记录 {class_student_id} 不属于分组 {group.group_name} 所在的班级")
         await memberships.set_group(class_student_id, group.id)
+        # 换了组 → "哪些任务覆盖到我"可能变了 → 重算该学生的技能进度（见 docs/方案设计.md §12）
+        await refresh_student_skills(db, enrollment.student_id)
         added += 1
     return GroupMemberBatchResult(
         group_id=group.id, added=added, member_total=await memberships.count_in_group(group.id)
@@ -338,6 +349,7 @@ async def add_group_students(
 async def remove_group_student(
     group_id: int,
     class_student_id: int,
+    db: DbSession,
     groups: GroupRepo,
     enrollments: ClassStudentRepo,
     memberships: StudentGroupRepo,
@@ -350,6 +362,7 @@ async def remove_group_student(
     if enrollment.class_id != group.class_id:
         raise BusinessRuleError("该学生不属于此分组所在的班级")
     await memberships.remove_member(class_student_id)
+    await refresh_student_skills(db, enrollment.student_id)
     return MessageOut(message="已移出分组")
 
 
@@ -390,6 +403,7 @@ async def list_class_students(
 async def add_class_student(
     class_id: int,
     payload: ClassStudentAddIn,
+    db: DbSession,
     classes: ClassRepo,
     students: UserRepo,
     enrollments: ClassStudentRepo,
@@ -423,6 +437,8 @@ async def add_class_student(
         if group is None:
             raise BusinessRuleError(f"分组序号 {payload.group_no} 在该班级中不存在")
         await memberships.set_group(enrollment.id, group.id)
+    # 入班 / 换组 → 分母变了 → 重算技能进度（见 docs/方案设计.md §12）
+    await refresh_student_skills(db, enrollment.student_id)
     return await _enrollment_detail(
         enrollment, classes=classes, students=students, groups=groups, memberships=memberships
     )
@@ -432,20 +448,26 @@ async def add_class_student(
     "/class-students/{class_student_id}", response_model=ApiResponse[ClassStudentRead], summary="更新在班记录"
 )
 async def update_class_student(
-    class_student_id: int, payload: ClassStudentUpdate, enrollments: ClassStudentRepo
+    class_student_id: int, payload: ClassStudentUpdate, db: DbSession, enrollments: ClassStudentRepo
 ) -> ClassStudent:
     enrollment = await _enrollment_or_404(enrollments, class_student_id)
-    return await enrollments.update(enrollment, payload.model_dump(exclude_unset=True))
+    updated = await enrollments.update(enrollment, payload.model_dump(exclude_unset=True))
+    if "status" in payload.model_dump(exclude_unset=True):
+        # 在班 / 离班一变，"哪些任务覆盖到我"就变了 → 重算技能进度
+        await refresh_student_skills(db, updated.student_id)
+    return updated
 
 
 @router.delete(
     "/class-students/{class_student_id}", response_model=ApiResponse[MessageOut], summary="学生离班"
 )
-async def leave_class(class_student_id: int, enrollments: ClassStudentRepo) -> MessageOut:
+async def leave_class(class_student_id: int, db: DbSession, enrollments: ClassStudentRepo) -> MessageOut:
     enrollment = await _enrollment_or_404(enrollments, class_student_id)
     if enrollment.status == "LEFT":
         return MessageOut(message="该学生已离班")
     await enrollments.update(enrollment, {"status": "LEFT", "left_at": now()})
+    # 离班后这个班不再把项目"发给他" → 分母变小 → 重算技能进度
+    await refresh_student_skills(db, enrollment.student_id)
     return MessageOut(message="学生已离班")
 
 
@@ -457,6 +479,7 @@ async def leave_class(class_student_id: int, enrollments: ClassStudentRepo) -> M
 async def set_student_group(
     class_student_id: int,
     payload: ClassStudentGroupSetIn,
+    db: DbSession,
     enrollments: ClassStudentRepo,
     groups: GroupRepo,
     memberships: StudentGroupRepo,
@@ -465,7 +488,10 @@ async def set_student_group(
     group = await _group_or_404(groups, payload.group_id)
     if group.class_id != enrollment.class_id:
         raise BusinessRuleError("目标分组不属于该学生所在班级")
-    return await memberships.set_group(class_student_id, group.id, assigned_by=payload.assigned_by)
+    membership = await memberships.set_group(class_student_id, group.id, assigned_by=payload.assigned_by)
+    # 换组 → 分组目标的任务覆盖可能变了 → 重算技能进度（见 docs/方案设计.md §12）
+    await refresh_student_skills(db, enrollment.student_id)
+    return membership
 
 
 # --------------------------------------------------------------- Excel 导入
@@ -483,11 +509,20 @@ async def import_class_students(
     db: DbSession,
     file: Annotated[UploadFile, File(description="填写好的学生名单 xlsx")],
     dry_run: Annotated[bool, Form(description="true=只校验不落库")] = False,
+    reuse_existing: Annotated[
+        bool,
+        Form(
+            description=(
+                "true=学号已存在时复用账号并加入本班（换老师 / 转班场景）；"
+                "false（默认）时已存在的学号按整批失败处理"
+            )
+        ),
+    ] = False,
 ) -> StudentImportResult:
     await _class_or_404(classes, class_id)
     rows, errors = parse_students(await file.read())
     existing_nos = await students.existing_user_nos([row.user_no for row in rows if row.user_no])
-    errors.extend(validate_students(rows, existing_user_nos=existing_nos))
+    errors.extend(validate_students(rows, existing_user_nos=existing_nos, allow_existing=reuse_existing))
     if errors:
         raise BusinessRuleError(
             f"名单校验未通过，共 {len(errors)} 处问题，已全部撤回未导入",

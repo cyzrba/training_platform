@@ -13,6 +13,9 @@ data/uploads/
 # 一键启动脚本的运行时文件（后端 pid 与日志）
 data/run/
 
+# 本地数据库备份（init_db / 迁移前的手工备份）
+data/backups/
+
 # 本地配置
 .env
 

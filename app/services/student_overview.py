@@ -12,10 +12,14 @@
 统一口径（与 ``app/services/skill.py`` 一致，别再另起一套算法）：
 
 - **技能点进度**取 ``student_skill.progress``（0~100，权威值；由
-  ``recalculate_student_skills`` 按"完成项目数 ÷ 关联项目总数"维护，教师手工调整记 MANUAL）；
+  ``recalculate_student_skills`` 按"完成项目数 ÷ 关联项目总数"维护，其中**分母只算已经
+  发布（PUBLISHED）的项目**，与任务无关；教师手工调整记 MANUAL）；
 - **技能树进度 / 整体进度 / 岗位匹配度**都是"相关技能点进度的均值"，
   与前端技能树页面的口径一致（展示的是均值，不是按技能点加权）；
-- **岗位的关联项目** = ``training_project.job_id`` 指向该岗位、且已发布（PUBLISHED）的项目；
+- **学生能看到的项目** = 全部已发布（``training_project.status = 'PUBLISHED'``）的项目，
+  不必等老师发任务；**任务 = 必修**，被任务点名要求做的项目在列表里带 ``is_required``，
+  做完必修与平时自己刷项目用的是同一份闯关记录，互不冲突（见 docs/方案设计.md §4.2）；
+- **岗位的关联项目** = ``training_project.job_id`` 指向该岗位的已发布项目；
   已完成 = 该学生 ``student_project.completed_at`` 有值（与技能进度的完成判定同源）；
 - **关卡进度** = 项目已启用关卡数（``project_module``）与最新一轮闯关已填写关卡数
   （``attempt_stage.is_filled``），所以重新挑战会从 0 重新计，而最高分保留。
@@ -27,12 +31,15 @@ from sqlmodel import func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.exceptions import NotFoundError
+from app.crud.attempt import StudentProjectPickRepository
+from app.crud.publish import PublishTaskRepository
 from app.models.account import SysUser
 from app.models.attempt import (
     AttemptStage,
     AttemptStageFile,
     ProjectSubmission,
     StudentProject,
+    StudentProjectPick,
     TrainingAttempt,
 )
 from app.models.enums import ENUM_INDEX, LearningLevel
@@ -66,6 +73,53 @@ async def _student_progress_map(session: AsyncSession, student_id: int) -> dict[
         StudentSkill.student_id == student_id
     )
     return {int(node_id): float(progress) for node_id, progress in (await session.exec(stmt)).all()}
+
+
+async def _published_project_ids(session: AsyncSession) -> set[int]:
+    """学生可见的项目 ID：全部已发布、未删除的项目（与任务无关）。
+
+    口径见 docs/方案设计.md §4.2 —— 项目在项目管理里"发布"即对学生开放；
+    任务只决定"哪些项目是必修"（见 ``_required_projects``）。
+    """
+    stmt = select(TrainingProject.id).where(
+        TrainingProject.status == "PUBLISHED",
+        TrainingProject.deleted_at.is_(None),  # type: ignore[attr-defined]
+    )
+    return {int(project_id) for project_id in (await session.exec(stmt)).all()}
+
+
+async def _required_projects(session: AsyncSession, student_id: int) -> dict[int, list[dict]]:
+    """任务点名要求该学生完成的项目 → 覆盖它的任务（学生端的"必修"标记）。"""
+    return await PublishTaskRepository(session).required_projects_of_student(student_id)
+
+
+def _required_fields(required: dict[int, list[dict]], project_id: int) -> dict:
+    """列表 / 详情里统一的必修字段：是否必修 + 点名它的任务 + 最近一个截止时间。"""
+    tasks = required.get(project_id, [])
+    deadlines = [task["deadline_at"] for task in tasks if task["deadline_at"] is not None]
+    return {
+        "is_required": bool(tasks),
+        "required_task_ids": [int(task["task_id"]) for task in tasks],
+        "required_task_titles": [str(task["task_title"]) for task in tasks],
+        "required_deadline_at": min(deadlines) if deadlines else None,
+    }
+
+
+def _source_fields(required: dict[int, list[dict]], pick: StudentProjectPick | None, project_id: int) -> dict:
+    """列表 / 详情统一的来源字段：必修（任务实时算）+ 自选（清单里有行）+ 组合标签。"""
+    fields = _required_fields(required, project_id)
+    sources = []
+    if pick is not None:
+        sources.append("SELF")
+    if fields["is_required"]:
+        sources.append("TEACHER")
+    return {
+        **fields,
+        "picked": pick is not None,
+        "picked_at": pick.created_at if pick is not None else None,
+        "sort_no": int(pick.sort_no) if pick is not None else 0,
+        "sources": sources,
+    }
 
 
 async def _published_project_job_ids(session: AsyncSession) -> dict[int, set[int]]:
@@ -153,7 +207,6 @@ async def recommend_jobs(session: AsyncSession, student_id: int, *, limit: int =
             groups.setdefault(node.tree_id, []).append(
                 {
                     "skill_node_id": node_id,
-                    "node_code": node.node_code,
                     "node_name": node.node_name,
                     "progress": round(progress_map.get(node_id, 0.0), 2),
                 }
@@ -166,7 +219,6 @@ async def recommend_jobs(session: AsyncSession, student_id: int, *, limit: int =
             skills_by_tree.append(
                 {
                     "tree_id": tree_id,
-                    "tree_code": tree.tree_code if tree else None,
                     "tree_name": tree.tree_name if tree else None,
                     "skill_total_count": len(skills),
                     "skill_done_count": sum(1 for item in skills if item["progress"] >= MASTERED_PROGRESS),
@@ -251,7 +303,6 @@ async def skill_tree_progress(session: AsyncSession, student_id: int) -> dict:
             node_items.append(
                 {
                     "skill_node_id": node_id,
-                    "node_code": node.node_code,
                     "node_name": node.node_name,
                     "description": node.description,
                     "status": node.status,
@@ -268,7 +319,6 @@ async def skill_tree_progress(session: AsyncSession, student_id: int) -> dict:
         tree_items.append(
             {
                 "tree_id": int(tree.id),
-                "tree_code": tree.tree_code,
                 "tree_name": tree.tree_name,
                 "description": tree.description,
                 "status": tree.status,
@@ -347,43 +397,50 @@ async def _skills_of_projects(session: AsyncSession, project_ids: list[int]) -> 
         grouped.setdefault(int(project_id), []).append(
             {
                 "skill_node_id": int(node.id),
-                "node_code": node.node_code,
                 "node_name": node.node_name,
                 "tree_id": int(tree.id),
-                "tree_code": tree.tree_code,
                 "tree_name": tree.tree_name,
             }
         )
     return grouped
 
 
-async def student_projects(session: AsyncSession, student_id: int) -> list[dict]:
-    """学生的实训项目列表：项目信息 + 该学生的最高分、当前关卡进度与状态。
+async def _project_items(
+    session: AsyncSession,
+    student_id: int,
+    project_ids: set[int],
+    *,
+    required: dict[int, list[dict]] | None = None,
+    picked: dict[int, StudentProjectPick] | None = None,
+) -> list[dict]:
+    """项目库与「我的实训」共用的条目构造：项目信息 + 该学生的进度 / 状态 + 来源标记。
 
-    - 列出所有已发布（PUBLISHED）且未软删的项目；学生没开始过的项目也返回，
-      ``status=NOT_STARTED``、成绩为 null、关卡进度 0/总数（前端可以自行过滤）；
+    - ``status`` / ``progress`` / ``best_score`` 来自 ``student_project``，没开始过的按
+      ``NOT_STARTED``、0、null 返回；
+    - ``is_required`` = 老师发任务点名要求该学生做这个项目（必修）；
+    - ``picked`` = 学生自己把它加进了「我的实训」（``picked_at`` / ``sort_no`` 同步带上）；
     - ``level_total`` = 项目选中的关卡数（``project_module``）；
-    - ``level_done`` = 最新一轮闯关已填写的关卡数（``attempt_stage.is_filled``）；
-    - ``best_score`` 只升不降，重新挑战也不会被清掉。
+    - ``level_done`` = 最新一轮闯关已填写的关卡数（``attempt_stage.is_filled``）。
     """
+    if not project_ids:
+        return []
+    required = required if required is not None else await _required_projects(session, student_id)
+    picked = picked if picked is not None else {}
     stmt = (
         select(TrainingProject)
-        .where(
-            TrainingProject.status == "PUBLISHED",
-            TrainingProject.deleted_at.is_(None),  # type: ignore[attr-defined]
-        )
+        .where(TrainingProject.id.in_(project_ids))  # type: ignore[attr-defined]
         .order_by(TrainingProject.id)
     )
     projects = list((await session.exec(stmt)).all())
     if not projects:
         return []
-    project_ids = [int(project.id) for project in projects]
+    ordered_ids = [int(project.id) for project in projects]
 
-    level_totals = await _level_totals(session, project_ids)
+    level_totals = await _level_totals(session, ordered_ids)
 
     record_stmt = select(StudentProject).where(
         StudentProject.student_id == student_id,
-        StudentProject.project_id.in_(project_ids),  # type: ignore[attr-defined]
+        StudentProject.project_id.in_(ordered_ids),  # type: ignore[attr-defined]
     )
     records = list((await session.exec(record_stmt)).all())
     record_by_project = {int(record.project_id): record for record in records}
@@ -398,7 +455,7 @@ async def student_projects(session: AsyncSession, student_id: int) -> list[dict]
         job_stmt = select(Job).where(Job.id.in_(job_ids))  # type: ignore[attr-defined]
         job_names = {int(job.id): job.job_name for job in (await session.exec(job_stmt)).all()}
 
-    skills_by_project = await _skills_of_projects(session, project_ids)
+    skills_by_project = await _skills_of_projects(session, ordered_ids)
 
     items: list[dict] = []
     for project in projects:
@@ -422,10 +479,58 @@ async def student_projects(session: AsyncSession, student_id: int) -> list[dict]
                 "progress": float(record.progress) if record else 0.0,
                 "level_total": level_total,
                 "level_done": level_done,
+                **_source_fields(required, picked.get(project_id), project_id),
                 "skill_nodes": skills_by_project.get(project_id, []),
             }
         )
     return items
+
+
+async def student_projects(session: AsyncSession, student_id: int) -> list[dict]:
+    """学生的实训项目库：**全部已发布**项目 + 该学生的进度 / 状态 / 来源标记。
+
+    老师发布项目后学生立刻能看到并闯关，不必等任务；草稿 / 已下架不出现，学生没开始过的
+    也返回（``status=NOT_STARTED``、成绩 null、进度 0/总数），前端按需过滤。
+    每条带 ``is_required``（老师点名必修）、``picked``（自己加进「我的实训」）、
+    ``sources``（SELF / TEACHER，可同时存在）。
+    """
+    published = await _published_project_ids(session)
+    if not published:
+        return []
+    picked_rows = await StudentProjectPickRepository(session).list_of_student(student_id)
+    picked = {int(row.project_id): row for row in picked_rows}
+    return await _project_items(session, student_id, published, picked=picked)
+
+
+def _my_project_sort_key(item: dict) -> tuple:
+    """「我的实训」排序：必修置顶 → 学生自定义 sort_no → 加入时间新的在前 → 项目 ID。"""
+    picked_at = item.get("picked_at")
+    return (
+        0 if item["is_required"] else 1,
+        int(item.get("sort_no") or 0),
+        -picked_at.timestamp() if picked_at is not None else 0.0,
+        int(item["project_id"]),
+    )
+
+
+async def my_projects(session: AsyncSession, student_id: int) -> list[dict]:
+    """「我的实训」：**学生自己挑的 ∪ 老师点名必修的**已发布项目。
+
+    - 清单只存"学生主动挑的"（``student_project_pick``）；必修是任务实时算出来的，
+      所以任务撤回 / 转班 / 删班都不用同步清单：自己挑过的留在列表里，纯任务下发的会消失；
+    - 项目下架 / 删除后不再出现在列表里（记录保留，项目重新上架就自动回来）；
+    - 排序：必修置顶 → 学生自定义 ``sort_no`` → 加入时间新的在前
+      （``PATCH .../my-projects/order`` 只调整自己挑的那部分）。
+    """
+    published = await _published_project_ids(session)
+    if not published:
+        return []
+    picked_rows = await StudentProjectPickRepository(session).list_of_student(student_id)
+    picked = {int(row.project_id): row for row in picked_rows}
+    required = await _required_projects(session, student_id)
+    wanted = (set(picked) | set(required)) & published
+    items = await _project_items(session, student_id, wanted, required=required, picked=picked)
+    return sorted(items, key=_my_project_sort_key)
 
 
 def _level_labels() -> dict[str, str]:
@@ -479,7 +584,7 @@ async def job_project_progress(session: AsyncSession, student_id: int, *, job_id
     - 岗位取 ``job_id`` 指定的那个；不传时取学生当前主岗位，没有主岗位则取最近选的一个；
       一个岗位都没选时返回 ``job_id=null`` 且三档全 0，前端可据此引导去选岗；
     - 传了不存在的 ``job_id`` 直接报"岗位不存在"，避免把笔误当成"没选岗位"；
-    - 只统计该岗位下**已发布（PUBLISHED）**且未软删的项目；
+    - 只统计该岗位下**已发布**的项目（口径同 ``student_projects``：发布即可见，与任务无关）；
     - 已完成 = 该学生 ``student_project.completed_at`` 有值（与技能进度的完成判定同源）。
     """
     job, is_primary = await _resolve_job(session, student_id, job_id)
@@ -624,6 +729,10 @@ async def _review_history(session: AsyncSession, submission_ids: list[int]) -> d
 async def student_project_detail(session: AsyncSession, student_id: int, project_id: int) -> dict:
     """单个实训项目的全量详情（学生视角）。
 
+    - **可见性**：项目必须是已发布（PUBLISHED）状态，否则当作不存在（404，
+      不泄露还在草稿 / 已下架的项目）；发布即可见，不要求先发任务；
+    - **必修标记**：``is_required`` + ``required_task_ids`` / ``required_task_titles`` /
+      ``required_deadline_at``（老师发任务点名要求做的项目）；
     - **任务简介**取 ``training_project.description``，另附岗位与关联技能点；
     - **关卡**按 ``project_module.stage_no`` 排序，每关带模块库的名称/说明、作答要求与验收标准，
       以及 ``items_json`` 里的**子标题 + 子标题简介（prompt）**；
@@ -631,7 +740,11 @@ async def student_project_detail(session: AsyncSession, student_id: int, project
     - **历史提交**按时间倒序，带提交日期与每次提交上的 **AI / 教师评语**（含各关卡维度得分与理由）。
     """
     project = await session.get(TrainingProject, project_id)
-    if project is None or project.deleted_at is not None:  # type: ignore[attr-defined]
+    if (
+        project is None
+        or project.deleted_at is not None  # type: ignore[attr-defined]
+        or project.status != "PUBLISHED"
+    ):
         raise NotFoundError(f"实训项目 {project_id} 不存在")
 
     module_stmt = (
@@ -701,7 +814,6 @@ async def student_project_detail(session: AsyncSession, student_id: int, project
                 "project_module_id": module_id,
                 "attempt_stage_id": int(stage.id) if stage is not None else None,
                 "stage_no": module.stage_no,
-                "stage_key": template.stage_key if template else None,
                 "stage_name": template.stage_name if template else f"关卡 {module.stage_no}",
                 "description": template.description if template else None,
                 "requirement": module.requirement or (template.default_requirement if template else None),
@@ -739,6 +851,11 @@ async def student_project_detail(session: AsyncSession, student_id: int, project
         "level_total": len(modules),
         "level_done": done_levels,
         "attempt_count": len(attempts),
+        **_source_fields(
+            await _required_projects(session, student_id),
+            await StudentProjectPickRepository(session).by_student_project(student_id, project_id),
+            project_id,
+        ),
         # 前端拿 current_attempt_id 去调保存作答接口（PUT /api/attempts/{id}/answers）
         "current_attempt_id": int(latest_attempt.id) if latest_attempt is not None else None,
         "current_attempt_no": latest_attempt.attempt_no if latest_attempt is not None else None,
@@ -767,6 +884,7 @@ async def student_project_detail(session: AsyncSession, student_id: int, project
 __all__ = [
     "MASTERED_PROGRESS",
     "job_project_progress",
+    "my_projects",
     "recommend_jobs",
     "skill_tree_progress",
     "student_project_detail",

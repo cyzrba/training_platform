@@ -49,7 +49,6 @@ class TrainingProject(Base, TimestampMixin, SoftDeleteMixin, TrainingProjectBase
 
 
 class ProjectStageTemplateBase(SQLModel):
-    stage_key: str = Field(max_length=50, description="七大模块 code")
     stage_name: str = Field(max_length=100, description="模块名称")
     description: str | None = Field(default=None, description="说明/描述")
     default_required: bool = Field(default=True, description="默认是否必填")
@@ -63,11 +62,11 @@ class ProjectStageTemplate(Base, TimestampMixin, SoftDeleteMixin, ProjectStageTe
     """标准化模块库（关卡模板）：教师可自定义增删，项目只能从这里挑。
 
     软删：删掉的条目不再出现在列表/详情里，但被项目引用过的历史仍可追溯；
-    重新用同一个 ``stage_key`` 新增时会把软删的条目恢复出来（见 create 接口）。
+    重新用同一个 ``stage_name`` 新增时会把软删的条目恢复出来（见 create 接口）。
     """
 
     __tablename__ = "project_stage_template"
-    __table_args__ = (UniqueConstraint("stage_key", name="uk_stage_template_key"),)
+    __table_args__ = (UniqueConstraint("stage_name", name="uk_stage_template_name"),)
 
     id: int | None = Field(default=None, primary_key=True)
 
@@ -97,7 +96,7 @@ class ProjectModule(Base, TimestampMixin, ProjectModuleBase, table=True):
     """项目模块组成：一条 = 项目里选中的一个模块库模板。
 
     只记录"被选中的模板"，没选的不落库，因此不需要 enabled 字段；
-    关卡内容（名称、code、默认要求/标准）统一读 project_stage_template，
+    关卡内容（名称、默认要求/标准）统一读 project_stage_template，
     要新增关卡必须先加到模块库，不能在项目里临时造。
     """
 

@@ -143,13 +143,13 @@ class SkillTreeRepository(BaseRepository[SkillTree]):
         filters: list[Any] = []
         if keyword and keyword.strip():
             pattern = f"%{keyword.strip()}%"
-            filters.append(or_(SkillTree.tree_name.like(pattern), SkillTree.tree_code.like(pattern)))
+            filters.append(SkillTree.tree_name.like(pattern))
         if status:
             filters.append(SkillTree.status == status)
         return await self.list_page(params, *filters)
 
-    async def by_code(self, tree_code: str) -> SkillTree | None:
-        return await self.get_by(tree_code=tree_code)
+    async def by_name(self, tree_name: str) -> SkillTree | None:
+        return await self.get_by(tree_name=tree_name)
 
 
 class SkillNodeRepository(BaseRepository[SkillNode]):
@@ -159,11 +159,15 @@ class SkillNodeRepository(BaseRepository[SkillNode]):
     soft_delete = True
 
     async def list_by_tree(self, tree_id: int) -> list[SkillNode]:
-        stmt = select(SkillNode).where(SkillNode.tree_id == tree_id).order_by(SkillNode.id)
+        stmt = (
+            select(SkillNode)
+            .where(SkillNode.tree_id == tree_id, SkillNode.deleted_at.is_(None))  # type: ignore[attr-defined]
+            .order_by(SkillNode.id)
+        )
         return list((await self.session.exec(stmt)).all())
 
-    async def by_code(self, node_code: str) -> SkillNode | None:
-        return await self.get_by(node_code=node_code)
+    async def by_name(self, node_name: str) -> SkillNode | None:
+        return await self.get_by(node_name=node_name)
 
 
 class SkillNodeDependencyRepository(BaseRepository[SkillNodeDependency]):
@@ -172,15 +176,27 @@ class SkillNodeDependencyRepository(BaseRepository[SkillNodeDependency]):
     model = SkillNodeDependency
 
     async def prerequisite_ids(self, node_id: int) -> list[int]:
-        stmt = select(SkillNodeDependency.prerequisite_node_id).where(SkillNodeDependency.node_id == node_id)
+        stmt = (
+            select(SkillNodeDependency.prerequisite_node_id)
+            .join(SkillNode, SkillNode.id == SkillNodeDependency.prerequisite_node_id)  # type: ignore[arg-type]
+            .where(
+                SkillNodeDependency.node_id == node_id,
+                SkillNode.deleted_at.is_(None),  # type: ignore[attr-defined]
+            )
+        )
         return list((await self.session.exec(stmt)).all())
 
     async def prerequisite_ids_of_many(self, node_ids: Sequence[int]) -> dict[int, list[int]]:
         if not node_ids:
             return {}
-        stmt = select(SkillNodeDependency.node_id, SkillNodeDependency.prerequisite_node_id).where(
-            SkillNodeDependency.node_id.in_(list(node_ids))
-        )  # type: ignore[attr-defined]
+        stmt = (
+            select(SkillNodeDependency.node_id, SkillNodeDependency.prerequisite_node_id)
+            .join(SkillNode, SkillNode.id == SkillNodeDependency.prerequisite_node_id)  # type: ignore[arg-type]
+            .where(
+                SkillNodeDependency.node_id.in_(list(node_ids)),  # type: ignore[attr-defined]
+                SkillNode.deleted_at.is_(None),  # type: ignore[attr-defined]
+            )
+        )
         grouped: dict[int, list[int]] = {}
         for node_id, prerequisite_id in (await self.session.exec(stmt)).all():
             grouped.setdefault(int(node_id), []).append(int(prerequisite_id))

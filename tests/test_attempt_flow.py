@@ -5,6 +5,8 @@ from decimal import Decimal
 import httpx
 import pytest
 
+from tests import helpers
+
 TEMPLATES = "/api/stage-templates"
 
 
@@ -13,21 +15,32 @@ async def _student(client: httpx.AsyncClient, user_no: str = "2026001") -> dict:
         "/api/users", json={"user_no": user_no, "real_name": "张三", "user_type": "STUDENT"}
     )
     assert response.status_code == 201, response.text
+    # 学生要能看到项目，得先在班里、并且老师把项目发给他（见 docs/方案设计.md §4.2）
+    await helpers.enroll(client, user_no)
     return response.json()
 
 
-async def _skill(client: httpx.AsyncClient, node_code: str = "IMG_BASE", node_name: str = "图像基础") -> dict:
+async def _skill(client: httpx.AsyncClient, node_name: str = "图像基础") -> dict:
     tree = (await client.get("/api/skill-trees")).json()
     if tree["total"] == 0:
-        tree = (await client.post("/api/skill-trees", json={"tree_code": "CV", "tree_name": "视觉系"})).json()
+        tree = (await client.post("/api/skill-trees", json={"tree_name": "视觉系"})).json()
     else:
         tree = tree["items"][0]
     return (
         await client.post(
             f"/api/skill-trees/{tree['id']}/nodes",
-            json={"node_code": node_code, "node_name": node_name},
+            json={"node_name": node_name},
         )
     ).json()
+
+
+async def _template(client: httpx.AsyncClient, name: str) -> dict:
+    """模块库按名称唯一：同名关卡直接复用，避免第二个项目建重复名称。"""
+    listed = (await client.get(TEMPLATES, params={"keyword": name})).json()
+    existing = next((item for item in listed["items"] if item["stage_name"] == name), None)
+    if existing is not None:
+        return existing
+    return (await client.post(TEMPLATES, json={"stage_name": name})).json()
 
 
 async def _project(
@@ -40,10 +53,8 @@ async def _project(
     items: list[dict] | None = None,
 ) -> dict:
     """建一个"两个关卡"的项目，默认直接发布。"""
-    first = (await client.post(TEMPLATES, json={"stage_key": f"{name}-REQ", "stage_name": "需求分析"})).json()
-    second = (
-        await client.post(TEMPLATES, json={"stage_key": f"{name}-DES", "stage_name": "方案设计"})
-    ).json()
+    first = await _template(client, "需求分析")
+    second = await _template(client, "方案设计")
     project = (
         await client.post("/api/projects", json={"project_name": name, "project_level": "BASIC"})
     ).json()
@@ -57,6 +68,7 @@ async def _project(
     if publish:
         published = await client.patch(f"/api/projects/{project['id']}", json={"status": "PUBLISHED"})
         assert published.json()["status"] == "PUBLISHED", published.text
+        await helpers.publish(client, [project["id"]])
     return project
 
 
@@ -87,7 +99,7 @@ async def test_start_attempt_creates_record_and_stages(client: httpx.AsyncClient
         "attempt_count"
     ] == 2
 
-    # 草稿项目不能开始
+    # 草稿项目不能开始（发布后对所有学生开放，草稿 / 已下架仍然不开放）
     draft = await _project(client, "草稿项目", publish=False)
     blocked = await client.post(f"/api/students/{student['id']}/projects/{draft['id']}/start")
     assert blocked.json()["code"] == 422
@@ -150,8 +162,8 @@ async def test_review_finalize_completes_project_and_updates_skills(
     client: httpx.AsyncClient,
 ) -> None:
     """教师评审定稿 PASS → 项目完成 → 该项目关联的技能点进度重算。"""
-    first_skill = await _skill(client, "IMG_BASE", "图像基础")
-    second_skill = await _skill(client, "EDGE_DETECT", "边缘检测")
+    first_skill = await _skill(client, "图像基础")
+    second_skill = await _skill(client, "边缘检测")
     student = await _student(client)
     project = await _project(client, "缺陷检测实训", skill_ids=(first_skill["id"], second_skill["id"]))
 
@@ -191,7 +203,7 @@ async def test_review_finalize_completes_project_and_updates_skills(
 
     # 项目完成 → 两个技能点各推进 100%（唯一关联项目就是这个项目）
     skills = (await client.get(f"/api/students/{student['id']}/skills")).json()
-    assert {skill["node_code"] for skill in skills} == {"IMG_BASE", "EDGE_DETECT"}
+    assert {skill["node_name"] for skill in skills} == {"图像基础", "边缘检测"}
     for skill in skills:
         assert Decimal(str(skill["progress"])) == Decimal(100)
         assert skill["source"] == "PROJECT"
@@ -203,7 +215,7 @@ async def test_skill_progress_uses_completed_over_related_projects(
     client: httpx.AsyncClient,
 ) -> None:
     """进度 = 完成项目数 ÷ 关联项目总数：只完成 2 个关联项目里的 1 个 → 50%。"""
-    skill = await _skill(client, "MODEL_TRAIN", "模型训练")
+    skill = await _skill(client, "模型训练")
     student = await _student(client)
     first = await _project(client, "项目甲", skill_ids=(skill["id"],))
     await _project(client, "项目乙", skill_ids=(skill["id"],))
@@ -231,7 +243,7 @@ async def test_skill_progress_uses_completed_over_related_projects(
 
 @pytest.mark.asyncio
 async def test_review_fail_keeps_project_open(client: httpx.AsyncClient) -> None:
-    skill = await _skill(client, "IMG_FILTER", "图像滤波")
+    skill = await _skill(client, "图像滤波")
     student = await _student(client)
     project = await _project(client, "未通过实训", skill_ids=(skill["id"],))
     attempt = (await client.post(f"/api/students/{student['id']}/projects/{project['id']}/start")).json()
@@ -296,7 +308,7 @@ async def test_ai_review_and_teacher_star(client: httpx.AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_objection_then_teacher_review_can_rollback(client: httpx.AsyncClient) -> None:
     """异议路线：AI 判通过 → 学生留言提异议 → 教师复核改判不通过 → 撤销完成并回滚技能进度。"""
-    skill = await _skill(client, "IMG_BASE", "图像基础")
+    skill = await _skill(client, "图像基础")
     student = await _student(client)
     project = await _project(client, "异议实训", skill_ids=(skill["id"],))
     attempt = (await client.post(f"/api/students/{student['id']}/projects/{project['id']}/start")).json()

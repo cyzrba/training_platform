@@ -15,6 +15,7 @@ from app.core.time import now
 from app.crud.attempt import AttemptStageRepository, StudentProjectRepository, TrainingAttemptRepository
 from app.crud.job_skill import ProjectSkillRepository, StudentSkillRepository
 from app.crud.project import ProjectModuleRepository, TrainingProjectRepository
+from tests import helpers
 
 RECOMMEND = "/api/students/{student_id}/job-recommendations"
 OVERVIEW = "/api/students/{student_id}/skill-tree-progress"
@@ -30,6 +31,8 @@ async def _student(client: httpx.AsyncClient, user_no: str = "2026001") -> dict:
         "/api/users", json={"user_no": user_no, "real_name": "张三", "user_type": "STUDENT"}
     )
     assert response.status_code == 201, response.text
+    # 学生要看到项目，得先在班里、并且老师把项目发给他（见 docs/方案设计.md §4.2）
+    await helpers.enroll(client, user_no)
     return response.json()
 
 
@@ -39,16 +42,14 @@ async def _job(client: httpx.AsyncClient, name: str, **extra: object) -> dict:
     return response.json()
 
 
-async def _tree(client: httpx.AsyncClient, code: str, name: str) -> dict:
-    response = await client.post("/api/skill-trees", json={"tree_code": code, "tree_name": name})
+async def _tree(client: httpx.AsyncClient, name: str) -> dict:
+    response = await client.post("/api/skill-trees", json={"tree_name": name})
     assert response.status_code == 201, response.text
     return response.json()
 
 
-async def _node(client: httpx.AsyncClient, tree_id: int, code: str, name: str) -> dict:
-    response = await client.post(
-        f"/api/skill-trees/{tree_id}/nodes", json={"node_code": code, "node_name": name}
-    )
+async def _node(client: httpx.AsyncClient, tree_id: int, name: str) -> dict:
+    response = await client.post(f"/api/skill-trees/{tree_id}/nodes", json={"node_name": name})
     assert response.status_code == 201, response.text
     return response.json()
 
@@ -101,8 +102,8 @@ def _group_of(item: dict, tree_id: int) -> dict:
     return next(group for group in item["skill_groups"] if group["tree_id"] == tree_id)
 
 
-async def _stage_template(client: httpx.AsyncClient, key: str, name: str) -> dict:
-    response = await client.post("/api/stage-templates", json={"stage_key": key, "stage_name": name})
+async def _stage_template(client: httpx.AsyncClient, name: str) -> dict:
+    response = await client.post("/api/stage-templates", json={"stage_name": name})
     assert response.status_code == 201, response.text
     return response.json()
 
@@ -155,11 +156,11 @@ async def test_job_recommendations_top3_with_grouped_skills(
 ) -> None:
     """默认返回前三名：按匹配度倒序，带岗位画像、技能/项目统计与按体系分组的技能点。"""
     student = await _student(client)
-    optical = await _tree(client, "OPTICAL_IMAGING", "光学成像系")
-    algorithm = await _tree(client, "TRADITIONAL_ALGORITHM", "传统算法系")
-    light = await _node(client, optical["id"], "N_LIGHT", "光源与打光")
-    filters = await _node(client, algorithm["id"], "N_FILTER", "图像滤波")
-    edges = await _node(client, algorithm["id"], "N_EDGE", "边缘检测")
+    optical = await _tree(client, "光学成像系")
+    algorithm = await _tree(client, "传统算法系")
+    light = await _node(client, optical["id"], "光源与打光")
+    filters = await _node(client, algorithm["id"], "图像滤波")
+    edges = await _node(client, algorithm["id"], "边缘检测")
 
     job_high = await _job(
         client,
@@ -183,8 +184,10 @@ async def test_job_recommendations_top3_with_grouped_skills(
     # 岗位高：1 个已发布项目（已完成）；岗位中：2 个已发布项目（完成 1 个）+ 1 个草稿（不计）
     project_high = await _project(db_session, "项目-高-1", job_high["id"], [light["id"]])
     project_mid_a = await _project(db_session, "项目-中-1", job_mid["id"], [light["id"]])
-    await _project(db_session, "项目-中-2", job_mid["id"], [filters["id"]])
+    project_mid_b = await _project(db_session, "项目-中-2", job_mid["id"], [filters["id"]])
     await _project(db_session, "项目-中-草稿", job_mid["id"], [filters["id"]], status="DRAFT")
+    # 发任务：草稿项目发不出去，也不该被学生看到
+    await helpers.publish(client, [project_high["id"], project_mid_a["id"], project_mid_b["id"]])
 
     await _complete_project(db_session, student["id"], project_high["id"])
     await _complete_project(db_session, student["id"], project_mid_a["id"])
@@ -208,7 +211,7 @@ async def test_job_recommendations_top3_with_grouped_skills(
     assert (top["project_total_count"], top["project_done_count"]) == (1, 1)
     assert [group["tree_name"] for group in top["skill_groups"]] == ["光学成像系"]
     assert top["skill_groups"][0]["skills"] == [
-        {"skill_node_id": light["id"], "node_code": "N_LIGHT", "node_name": "光源与打光", "progress": 100}
+        {"skill_node_id": light["id"], "node_name": "光源与打光", "progress": 100}
     ]
 
     second = listed[1]
@@ -218,7 +221,7 @@ async def test_job_recommendations_top3_with_grouped_skills(
     # 按技能树体系分组：两个体系各 1 个技能点
     assert _group_of(second, optical["id"])["skill_done_count"] == 1
     algorithm_group = _group_of(second, algorithm["id"])
-    assert algorithm_group["tree_code"] == "TRADITIONAL_ALGORITHM"
+    assert algorithm_group["tree_name"] == "传统算法系"
     assert algorithm_group["skill_done_count"] == 0
     assert algorithm_group["skills"][0]["progress"] == 50
 
@@ -244,14 +247,15 @@ async def test_job_recommendations_top3_with_grouped_skills(
 async def test_skill_tree_progress_overview(client: httpx.AsyncClient, db_session: AsyncSession) -> None:
     """技能树总览：全部技能树与节点 + 节点进度、技能树总进度、整体进度与技能点统计。"""
     student = await _student(client)
-    optical = await _tree(client, "OPTICAL_IMAGING", "光学成像系")
-    algorithm = await _tree(client, "TRADITIONAL_ALGORITHM", "传统算法系")
-    light = await _node(client, optical["id"], "N_LIGHT", "光源与打光")
-    camera = await _node(client, optical["id"], "N_CAMERA", "相机标定")
-    filters = await _node(client, algorithm["id"], "N_FILTER", "图像滤波")
+    optical = await _tree(client, "光学成像系")
+    algorithm = await _tree(client, "传统算法系")
+    light = await _node(client, optical["id"], "光源与打光")
+    camera = await _node(client, optical["id"], "相机标定")
+    filters = await _node(client, algorithm["id"], "图像滤波")
 
     job = await _job(client, "视觉算法工程师")
     project = await _project(db_session, "项目-1", job["id"], [light["id"], filters["id"]])
+    await helpers.publish(client, [project["id"]])
     await _complete_project(db_session, student["id"], project["id"])
 
     await _set_progress(db_session, student["id"], light["id"], 100)
@@ -265,7 +269,7 @@ async def test_skill_tree_progress_overview(client: httpx.AsyncClient, db_sessio
     assert overview["overall_percent"] == 46.67  # (100 + 40 + 0) ÷ 3
 
     optical_out, algorithm_out = overview["trees"]
-    assert (optical_out["tree_code"], optical_out["tree_name"]) == ("OPTICAL_IMAGING", "光学成像系")
+    assert optical_out["tree_name"] == "光学成像系"
     assert (optical_out["total"], optical_out["done"], optical_out["percent"]) == (2, 1, 70)
     assert [node["node_name"] for node in optical_out["nodes"]] == ["光源与打光", "相机标定"]
 
@@ -290,11 +294,11 @@ async def test_student_training_projects_view(client: httpx.AsyncClient, db_sess
     """实训项目列表：已发布项目 + 该学生的最高分、关卡进度（总/完成）、岗位、技能点与状态。"""
     student = await _student(client)
     job = await _job(client, "工业视觉工程师")
-    tree = await _tree(client, "OPTICAL_IMAGING", "光学成像系")
-    light = await _node(client, tree["id"], "N_LIGHT", "光源与打光")
-    camera = await _node(client, tree["id"], "N_CAMERA", "相机标定")
-    template_a = await _stage_template(client, "REQ", "需求分析")
-    template_b = await _stage_template(client, "DATA", "数据处理")
+    tree = await _tree(client, "光学成像系")
+    light = await _node(client, tree["id"], "光源与打光")
+    camera = await _node(client, tree["id"], "相机标定")
+    template_a = await _stage_template(client, "需求分析")
+    template_b = await _stage_template(client, "数据处理")
 
     # 已发布项目：2 个关卡、2 个技能点，学生已开始（最新一轮只填了 1 关）
     started = await _project(db_session, "成像系统搭建实训", job["id"], [light["id"], camera["id"]])
@@ -311,6 +315,8 @@ async def test_student_training_projects_view(client: httpx.AsyncClient, db_sess
     # 草稿项目：学生看不到
     draft = await _project(db_session, "未发布项目", job["id"], [], status="DRAFT")
     await _module(db_session, draft["id"], template_a["id"], 1)
+    # 发任务：只发两个已发布项目（草稿发不出去）
+    await helpers.publish(client, [started["id"], untouched["id"]])
 
     listed = (await client.get(PROJECTS.format(student_id=student["id"]))).json()
     assert [item["project_id"] for item in listed] == [started["id"], untouched["id"]]
@@ -326,18 +332,14 @@ async def test_student_training_projects_view(client: httpx.AsyncClient, db_sess
     assert first["skill_nodes"] == [
         {
             "skill_node_id": light["id"],
-            "node_code": "N_LIGHT",
             "node_name": "光源与打光",
             "tree_id": tree["id"],
-            "tree_code": "OPTICAL_IMAGING",
             "tree_name": "光学成像系",
         },
         {
             "skill_node_id": camera["id"],
-            "node_code": "N_CAMERA",
             "node_name": "相机标定",
             "tree_id": tree["id"],
-            "tree_code": "OPTICAL_IMAGING",
             "tree_name": "光学成像系",
         },
     ]
@@ -361,12 +363,24 @@ async def test_job_project_progress_by_level(client: httpx.AsyncClient, db_sessi
     other_job = await _job(client, "数据标注专员")
 
     basic_done = await _project(db_session, "基础-已完成", job["id"], [])
-    await _project(db_session, "基础-未完成", job["id"], [])
-    await _project(db_session, "进阶-未完成", job["id"], [], level="ADVANCED")
-    await _project(db_session, "拓展-未完成A", job["id"], [], level="EXPANDED")
-    await _project(db_session, "拓展-未完成B", job["id"], [], level="EXPANDED")
+    basic_open = await _project(db_session, "基础-未完成", job["id"], [])
+    advanced_open = await _project(db_session, "进阶-未完成", job["id"], [], level="ADVANCED")
+    expanded_a = await _project(db_session, "拓展-未完成A", job["id"], [], level="EXPANDED")
+    expanded_b = await _project(db_session, "拓展-未完成B", job["id"], [], level="EXPANDED")
     await _project(db_session, "基础-草稿", job["id"], [], status="DRAFT")
     other_done = await _project(db_session, "其它岗位-已完成", other_job["id"], [])
+    # 发任务：本条任务覆盖两个岗位的已发布项目（草稿项目不参与）
+    await helpers.publish(
+        client,
+        [
+            basic_done["id"],
+            basic_open["id"],
+            advanced_open["id"],
+            expanded_a["id"],
+            expanded_b["id"],
+            other_done["id"],
+        ],
+    )
 
     await _complete_project(db_session, student["id"], basic_done["id"])
     await _complete_project(db_session, student["id"], other_done["id"])

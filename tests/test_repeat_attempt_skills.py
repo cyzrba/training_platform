@@ -16,6 +16,7 @@ import httpx
 import pytest
 
 from app.services import ai_review, settings_store
+from tests import helpers
 
 #: 及格线兜底是 60（没有 growth_rule 时），90 通过、30 不通过
 PASS_SCORE = 90.0
@@ -60,26 +61,33 @@ def _stub_config(monkeypatch: pytest.MonkeyPatch) -> None:
 # ------------------------------------------------------------------ 造数据
 
 
-async def _skill_node(client: httpx.AsyncClient, code: str = "IMG_BASE") -> dict:
+async def _skill_node(client: httpx.AsyncClient) -> dict:
     trees = (await client.get("/api/skill-trees")).json()
     tree = (
         trees["items"][0]
         if trees["total"]
-        else (await client.post("/api/skill-trees", json={"tree_code": "CV", "tree_name": "视觉系"})).json()
+        else (await client.post("/api/skill-trees", json={"tree_name": "视觉系"})).json()
     )
     return (
         await client.post(
             f"/api/skill-trees/{tree['id']}/nodes",
-            json={"node_code": code, "node_name": "引脚检测基础"},
+            json={"node_name": "引脚检测基础"},
         )
     ).json()
 
 
+async def _template(client: httpx.AsyncClient, name: str) -> dict:
+    """模块库按名称唯一：多个项目共用同一个关卡模板。"""
+    listed = (await client.get("/api/stage-templates", params={"keyword": name})).json()
+    existing = next((item for item in listed["items"] if item["stage_name"] == name), None)
+    if existing is not None:
+        return existing
+    return (await client.post("/api/stage-templates", json={"stage_name": name})).json()
+
+
 async def _project(client: httpx.AsyncClient, name: str, *, skill_id: int) -> dict:
     """建一个"单关卡 + 已发布 + 关联技能 + 带评分标准"的项目。"""
-    template = (
-        await client.post("/api/stage-templates", json={"stage_key": f"{name}-REQ", "stage_name": "需求分析"})
-    ).json()
+    template = await _template(client, "需求分析")
     project = (
         await client.post("/api/projects", json={"project_name": name, "project_level": "BASIC"})
     ).json()
@@ -89,6 +97,7 @@ async def _project(client: httpx.AsyncClient, name: str, *, skill_id: int) -> di
     )
     await client.put(f"/api/projects/{project['id']}/skills", json={"skill_node_ids": [skill_id]})
     await client.patch(f"/api/projects/{project['id']}", json={"status": "PUBLISHED"})
+    await helpers.publish(client, [project["id"]])
     uploaded = (
         await client.post(
             f"/api/projects/{project['id']}/files/upload",
@@ -101,11 +110,13 @@ async def _project(client: httpx.AsyncClient, name: str, *, skill_id: int) -> di
 
 
 async def _student(client: httpx.AsyncClient, user_no: str) -> dict:
-    return (
+    student = (
         await client.post(
             "/api/users", json={"user_no": user_no, "real_name": "重复闯关学生", "user_type": "STUDENT"}
         )
     ).json()
+    await helpers.enroll(client, user_no)
+    return student
 
 
 async def _attempt_and_submit(
@@ -195,7 +206,7 @@ async def test_repeat_fail_keeps_skill(client: httpx.AsyncClient, monkeypatch: p
     monkeypatch.setattr(ai_review, "call_llm", llm)
     _stub_config(monkeypatch)
 
-    skill = await _skill_node(client, code="IMG_BASE_2")
+    skill = await _skill_node(client)
     await _project(client, "分母项目", skill_id=skill["id"])
     project = await _project(client, "重复挑战的项目", skill_id=skill["id"])
     student = await _student(client, "2026502")
@@ -249,7 +260,7 @@ async def test_regrade_rolls_back_only_when_no_pass_left(
     monkeypatch.setattr(ai_review, "call_llm", llm)
     _stub_config(monkeypatch)
 
-    skill = await _skill_node(client, code="IMG_BASE_3")
+    skill = await _skill_node(client)
     alpha = await _project(client, "项目甲", skill_id=skill["id"])
     beta = await _project(client, "项目乙", skill_id=skill["id"])
     student = await _student(client, "2026503")
@@ -296,7 +307,7 @@ async def test_reattempt_in_flight_does_not_downgrade_skill(
     monkeypatch.setattr(ai_review, "call_llm", llm)
     _stub_config(monkeypatch)
 
-    skill = await _skill_node(client, code="IMG_BASE_4")
+    skill = await _skill_node(client)
     alpha = await _project(client, "正在重挑的项目", skill_id=skill["id"])
     beta = await _project(client, "同步进行的新项目", skill_id=skill["id"])
     student = await _student(client, "2026504")

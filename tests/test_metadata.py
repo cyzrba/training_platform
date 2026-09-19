@@ -3,9 +3,9 @@
 from app.models import Base
 
 
-def test_table_count_is_39() -> None:
-    """38 张业务表 + P3 新增的 project_file（项目附件）。"""
-    assert len(Base.metadata.tables) == 39
+def test_table_count_is_44() -> None:
+    """40 张业务表 + J 域任务下发的 4 张（publish_task / target / job / project）。"""
+    assert len(Base.metadata.tables) == 44
 
 
 def test_domain_table_names() -> None:
@@ -40,6 +40,7 @@ def test_domain_table_names() -> None:
         # E 闯关与评审
         "file_asset",
         "student_project",
+        "student_project_pick",
         "training_attempt",
         "attempt_stage",
         "attempt_stage_file",
@@ -57,16 +58,21 @@ def test_domain_table_names() -> None:
         # I 通知与审计
         "notification",
         "operation_log",
+        # J 任务下发
+        "publish_task",
+        "publish_task_target",
+        "publish_task_job",
+        "publish_task_project",
     }
     assert set(Base.metadata.tables) == expected
 
 
 def test_index_and_foreign_key_count() -> None:
     indexes = {index.name for table in Base.metadata.tables.values() for index in table.indexes}
-    assert len(indexes) == 35
+    assert len(indexes) == 42
 
     foreign_keys = sum(len(table.foreign_keys) for table in Base.metadata.tables.values())
-    assert foreign_keys == 60
+    assert foreign_keys == 70
 
 
 def test_soft_delete_tables() -> None:
@@ -80,6 +86,7 @@ def test_soft_delete_tables() -> None:
         "project_stage_template",
         "training_project",
         "knowledge_doc",
+        "publish_task",
     }
     for name in soft_delete_tables:
         assert "deleted_at" in Base.metadata.tables[name].columns

@@ -141,7 +141,7 @@ async def check_jobs_and_skills(client: httpx.AsyncClient, students: list[dict],
     for user in students:
         for skill in await call(client, "get", f"/api/students/{user['id']}/skills"):
             progress = float(skill["progress"])
-            mark = f"{user['user_no']}·{skill.get('node_code')}"
+            mark = f"{user['user_no']}·{skill.get('node_name')}"
             if not 0 <= progress <= 100:
                 bad_range.append(f"{mark}={progress}")
             if progress <= 0 and skill.get("activated_at"):
@@ -182,6 +182,26 @@ async def check_projects(client: httpx.AsyncClient, checks: list[Check]) -> dict
             "、".join(no_skill) if no_skill else f"{len(published)} 个已发布项目",
         )
     )
+
+    # 任务下发：已发布的任务必须仍带着项目和目标 —— 否则学生端要么看不到，要么看到个空任务
+    tasks = await page_all(client, "/api/publish-tasks")
+    published_tasks = [item for item in tasks if item["status"] == "PUBLISHED"]
+    empty_tasks: list[str] = []
+    for task in published_tasks:
+        detail = await call(client, "get", f"/api/publish-tasks/{task['id']}")
+        if not detail["projects"]:
+            empty_tasks.append(f"{task['title']}（没有项目）")
+        if not detail["targets"]:
+            empty_tasks.append(f"{task['title']}（没有目标班级）")
+    checks.append(
+        Check(
+            "任务下发：已发布任务都有项目与目标",
+            not empty_tasks,
+            "、".join(empty_tasks) if empty_tasks else f"{len(published_tasks)} 条已发布任务",
+        )
+    )
+    scheduled = [item["title"] for item in tasks if item["status"] == "PENDING"]
+    checks.append(Check("任务下发：定时任务待发布", True, "、".join(scheduled) if scheduled else "无"))
 
     docs = await page_all(client, "/api/knowledge/docs", doc_type="EVAL_CRITERIA")
     checks.append(Check("知识库：评分标准已入库", bool(docs), f"{len(docs)} 份"))

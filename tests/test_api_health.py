@@ -15,8 +15,9 @@ async def test_enum_dict_endpoints(client) -> None:
     response = await client.get("/api/enums")
     assert response.status_code == 200
     payload = response.json()
-    assert len(payload) == 27  # 去掉 skill_state，新增 project_file_kind
+    assert len(payload) == 30  # 去掉 skill_state，新增 project_file_kind / 任务下发三项
     assert {item["key"] for item in payload} >= {"user_type", "submission_status", "skill_progress_source"}
+    assert {item["key"] for item in payload} >= {"publish_mode", "publish_task_status", "publish_target_type"}
     assert "skill_state" not in {item["key"] for item in payload}
     assert "project_file_kind" in {item["key"] for item in payload}
 

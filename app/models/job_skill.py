@@ -72,7 +72,6 @@ class StudentJob(Base, TimestampMixin, StudentJobBase, table=True):
 
 
 class SkillTreeBase(SQLModel):
-    tree_code: str = Field(max_length=50, description="技能树编码")
     tree_name: str = Field(max_length=100, description="技能树名称")
     description: str | None = Field(default=None, max_length=255, description="说明/描述")
     status: str = Field(default="ENABLED", max_length=20, description="ENABLED / DISABLED")
@@ -82,7 +81,7 @@ class SkillTree(Base, TimestampMixin, SoftDeleteMixin, SkillTreeBase, table=True
     """技能树体系（光学成像系 / 传统算法系 / 深度学习系 / 系统部署系）。"""
 
     __tablename__ = "skill_tree"
-    __table_args__ = (UniqueConstraint("tree_code", name="uk_skill_tree_code"),)
+    __table_args__ = (UniqueConstraint("tree_name", name="uk_skill_tree_name"),)
 
     id: int | None = Field(default=None, primary_key=True)
 
@@ -92,7 +91,6 @@ class SkillTree(Base, TimestampMixin, SoftDeleteMixin, SkillTreeBase, table=True
 
 class SkillNodeBase(SQLModel):
     tree_id: int = Field(foreign_key="skill_tree.id", description="技能树 ID")
-    node_code: str = Field(max_length=50, description="技能节点编码")
     node_name: str = Field(max_length=100, description="技能节点名称")
     description: str | None = Field(default=None, description="说明/描述")
     unlock_note: str | None = Field(default=None, max_length=255, description="给学生看的解锁说明")
@@ -107,7 +105,7 @@ class SkillNode(Base, TimestampMixin, SoftDeleteMixin, SkillNodeBase, table=True
 
     __tablename__ = "skill_node"
     __table_args__ = (
-        UniqueConstraint("node_code", name="uk_skill_node_code"),
+        UniqueConstraint("node_name", name="uk_skill_node_name"),
         Index("idx_skill_node_tree", "tree_id"),
     )
 
