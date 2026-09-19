@@ -26,7 +26,8 @@ data/backups/
 *.egg-info/
 
 # 本地下载的向量 / 重排模型权重（数 GB，按 system_config 的 model_path 引用）
-models/
+# 注意必须写成 /models/：不带前导斜杠会连 app/models/ 一起忽略，新加的表模型会被静默漏提交
+/models/
 
 # 本地 RAG 中间件的持久化数据（Milvus / etcd / MinIO 卷）
 deploy/data/
