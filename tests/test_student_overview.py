@@ -20,7 +20,7 @@ from tests import helpers
 RECOMMEND = "/api/students/{student_id}/job-recommendations"
 OVERVIEW = "/api/students/{student_id}/skill-tree-progress"
 PROJECTS = "/api/students/{student_id}/training-projects"
-JOB_PROGRESS = "/api/students/{student_id}/job-project-progress"
+PROJECT_PROGRESS = "/api/students/{student_id}/project-progress"
 
 
 # --------------------------------------------------------------------- 造数
@@ -356,8 +356,8 @@ async def test_student_training_projects_view(client: httpx.AsyncClient, db_sess
 
 
 @pytest.mark.asyncio
-async def test_job_project_progress_by_level(client: httpx.AsyncClient, db_session: AsyncSession) -> None:
-    """岗位项目进度：按基础 / 进阶 / 拓展统计"总数 / 已完成数"，草稿与其它岗位的项目不计。"""
+async def test_student_project_progress_by_level(client: httpx.AsyncClient, db_session: AsyncSession) -> None:
+    """实训项目进度：按三档分组，分母支持"全部 / 我自主选择的 / 老师下发的"三种口径。"""
     student = await _student(client)
     job = await _job(client, "工业视觉工程师")
     other_job = await _job(client, "数据标注专员")
@@ -367,6 +367,8 @@ async def test_job_project_progress_by_level(client: httpx.AsyncClient, db_sessi
     advanced_open = await _project(db_session, "进阶-未完成", job["id"], [], level="ADVANCED")
     expanded_a = await _project(db_session, "拓展-未完成A", job["id"], [], level="EXPANDED")
     expanded_b = await _project(db_session, "拓展-未完成B", job["id"], [], level="EXPANDED")
+    # 已发布但没发给这个班、学生也没自己挑：只在"全部"口径里出现
+    unassigned = await _project(db_session, "基础-未下发", job["id"], [])
     await _project(db_session, "基础-草稿", job["id"], [], status="DRAFT")
     other_done = await _project(db_session, "其它岗位-已完成", other_job["id"], [])
     # 发任务：本条任务覆盖两个岗位的已发布项目（草稿项目不参与）
@@ -384,47 +386,61 @@ async def test_job_project_progress_by_level(client: httpx.AsyncClient, db_sessi
 
     await _complete_project(db_session, student["id"], basic_done["id"])
     await _complete_project(db_session, student["id"], other_done["id"])
+    # 自己加进「我的实训」的项目（含一个已完成、一个未完成、一个老师没下发的）
+    picked = await client.post(
+        f"/api/students/{student['id']}/my-projects",
+        json={"project_ids": [basic_done["id"], basic_open["id"], unassigned["id"]]},
+    )
+    assert picked.status_code in (200, 201), picked.text
 
-    # 选岗：把工业视觉工程师设为主岗位
+    # 选岗：把工业视觉工程师设为主岗位 —— 主岗位不影响这个视图的分母
     selected = await client.post(
         f"/api/students/{student['id']}/jobs", json={"job_id": job["id"], "is_primary": True}
     )
     assert selected.status_code == 201, selected.text
 
-    progress = (await client.get(JOB_PROGRESS.format(student_id=student["id"]))).json()
-    assert (progress["job_id"], progress["job_name"], progress["is_primary"]) == (
-        job["id"],
-        "工业视觉工程师",
-        True,
-    )
-    assert (progress["total"], progress["completed"]) == (5, 1)
+    # 默认口径 = 全部已发布项目：4 个基础（含其它岗位那个、老师没下发那个）+ 1 进阶 + 2 拓展
+    progress = (await client.get(PROJECT_PROGRESS.format(student_id=student["id"]))).json()
+    assert progress["scope"] == "ALL"
+    assert (progress["total"], progress["completed"]) == (7, 2)
     assert progress["levels"] == [
-        {"level_type": "BASIC", "level_name": "基础", "total": 2, "completed": 1, "percent": 50.0},
+        {"level_type": "BASIC", "level_name": "基础", "total": 4, "completed": 2, "percent": 50.0},
         {"level_type": "ADVANCED", "level_name": "进阶", "total": 1, "completed": 0, "percent": 0.0},
         {"level_type": "EXPANDED", "level_name": "拓展", "total": 2, "completed": 0, "percent": 0.0},
     ]
 
-    # 指定别的岗位：读的是那个岗位的项目，且不是主岗位
-    other = (
-        await client.get(JOB_PROGRESS.format(student_id=student["id"]), params={"job_id": other_job["id"]})
+    # 老师下发的口径：那条任务点了 6 个项目，未下发的那个不算；草稿也不算
+    required = (
+        await client.get(PROJECT_PROGRESS.format(student_id=student["id"]), params={"scope": "TEACHER"})
     ).json()
-    assert (other["job_id"], other["is_primary"], other["total"], other["completed"]) == (
-        other_job["id"],
-        False,
-        1,
-        1,
-    )
-    assert other["levels"][0]["percent"] == 100.0
+    assert required["scope"] == "TEACHER"
+    assert (required["total"], required["completed"]) == (6, 2)
+    assert [item["total"] for item in required["levels"]] == [3, 1, 2]
 
-    # 没选岗位的学生：返回空岗位 + 三档全 0，而不是报错
+    # 我自主选择的口径：只在「我的实训」清单里挑的项目，含老师没下发的那个
+    mine = (
+        await client.get(PROJECT_PROGRESS.format(student_id=student["id"]), params={"scope": "SELF"})
+    ).json()
+    assert mine["scope"] == "SELF"
+    assert (mine["total"], mine["completed"]) == (3, 1)
+    assert mine["levels"] == [
+        {"level_type": "BASIC", "level_name": "基础", "total": 3, "completed": 1, "percent": 33.33},
+        {"level_type": "ADVANCED", "level_name": "进阶", "total": 0, "completed": 0, "percent": 0.0},
+        {"level_type": "EXPANDED", "level_name": "拓展", "total": 0, "completed": 0, "percent": 0.0},
+    ]
+
+    # 没选岗位、也没自己挑项目的学生：全部 / 老师下发两种口径照旧有分母，自主选择为 0
     idle = await _student(client, user_no="2026999")
-    empty = (await client.get(JOB_PROGRESS.format(student_id=idle["id"]))).json()
-    assert (empty["job_id"], empty["is_primary"], empty["total"], empty["completed"]) == (None, False, 0, 0)
-    assert [item["total"] for item in empty["levels"]] == [0, 0, 0]
+    empty = (await client.get(PROJECT_PROGRESS.format(student_id=idle["id"]))).json()
+    assert (empty["total"], empty["completed"]) == (7, 0)
+    assert [item["total"] for item in empty["levels"]] == [4, 1, 2]
+    idle_mine = (
+        await client.get(PROJECT_PROGRESS.format(student_id=idle["id"]), params={"scope": "SELF"})
+    ).json()
+    assert (idle_mine["total"], idle_mine["completed"]) == (0, 0)
 
-    # 传了不存在的岗位：报错，不当作"没选岗位"
-    assert (await client.get(JOB_PROGRESS.format(student_id=student["id"]), params={"job_id": 999})).json()[
-        "code"
-    ] == 422
-    missing = await client.get(JOB_PROGRESS.format(student_id=999))
+    # 非法口径与不存在的学生都要报错
+    bad = await client.get(PROJECT_PROGRESS.format(student_id=student["id"]), params={"scope": "X"})
+    assert bad.json()["code"] == 422
+    missing = await client.get(PROJECT_PROGRESS.format(student_id=999))
     assert missing.json()["code"] == 422

@@ -33,7 +33,6 @@ from app.schemas.job_skill import (
     GrowthRuleUpdate,
     JobCreate,
     JobDetail,
-    JobProjectProgress,
     JobRead,
     JobRecommendation,
     JobSkillSetIn,
@@ -50,13 +49,15 @@ from app.schemas.job_skill import (
     StudentJobDetail,
     StudentJobPrimaryIn,
     StudentJobSetIn,
+    StudentProjectProgress,
     StudentSkillDetail,
     StudentSkillPatchIn,
 )
 from app.schemas.review import SkillRecalcResult
 from app.services.skill import recalculate_student_skills
 from app.services.student_overview import (
-    job_project_progress,
+    ProjectProgressScope,
+    project_progress,
     recommend_jobs,
     skill_tree_progress,
 )
@@ -688,25 +689,27 @@ async def get_skill_tree_progress(student_id: int, db: DbSession, students: User
 
 
 @router.get(
-    "/students/{student_id}/job-project-progress",
-    response_model=ApiResponse[JobProjectProgress],
-    summary="学生所选岗位的实训项目进度（基础/进阶/拓展的总数与已完成数）",
+    "/students/{student_id}/project-progress",
+    response_model=ApiResponse[StudentProjectProgress],
+    summary="学生的实训项目进度（按全部/自主选择/老师下发三种口径分档）",
 )
-async def get_job_project_progress(
+async def get_project_progress(
     student_id: int,
     db: DbSession,
     students: UserRepo,
-    job_id: Annotated[
-        int | None, Query(description="指定岗位，留空取学生当前主岗位（没有则取最近选的）")
-    ] = None,
+    scope: Annotated[
+        ProjectProgressScope,
+        Query(description="分母口径：ALL 全部已发布项目 / SELF 我自主选择的 / TEACHER 老师下发的"),
+    ] = ProjectProgressScope.ALL,
 ) -> dict:
-    """按学生选择的岗位统计实训项目：基础 / 进阶 / 拓展三档各有多少个、完成了多少个。
+    """统计实训项目进度：基础 / 进阶 / 拓展三档各有多少个、该学生完成了多少个。
 
-    只统计该岗位下已发布（PUBLISHED）的项目；已完成按 ``student_project.completed_at`` 判定。
-    一个岗位都没选时返回 ``job_id=null`` 且三档全 0，前端可据此引导去选岗。
+    分母由 ``scope`` 决定，三种口径都只算**已发布（PUBLISHED）项目**，与选岗无关；
+    已完成按 ``student_project.completed_at`` 判定。岗位维度的项目数见
+    ``GET /students/{id}/job-recommendations`` 的 ``project_total_count`` / ``project_done_count``。
     """
     await _student_or_404(students, student_id)
-    return await job_project_progress(db, student_id, job_id=job_id)
+    return await project_progress(db, student_id, scope=scope)
 
 
 __all__ = ["router"]

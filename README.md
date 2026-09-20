@@ -58,17 +58,29 @@ uv run python scripts/download_rag_models.py
 # 4. 配置（默认值就是本机 MinIO，可直接用）
 cp .env.example .env            # Windows: Copy-Item .env.example .env
 
-# 4.1 配主模型与 api key（存 system_config 表，改完即生效，不用重启）
+# 4.1 配大模型与 api key（存 system_config 表，改完即生效，不用重启）
 uv run python scripts/set_llm_config.py --show
 LLM_API_KEY=sk-xxx uv run python scripts/set_llm_config.py \
     --model deepseek-v4-flash --base-url https://api.deepseek.com/v1 --api-key-env LLM_API_KEY
+# 再挂别家（AI 助教里可选）：只需写这一家的地址 / 模型名 / key
+uv run python scripts/set_llm_config.py --model-key kimi --model kimi-latest \
+    --base-url https://api.moonshot.cn/v1
+LLM_API_KEY=sk-xxx uv run python scripts/set_llm_config.py --model-key kimi --api-key-env LLM_API_KEY
 
 # 5. 建库 + 种子数据 + 启动
 uv run python -m app.db.init_db          # 迁移到最新 + 写种子（幂等，可反复执行）
 uv run uvicorn app.main:app --reload     # 接口文档 http://127.0.0.1:8000/docs
 ```
 
-演示数据（岗位、技能树、项目、闯关记录等）：`uv run python -m app.db.seed_demo`。
+演示数据（教师、班级、学生、选岗、闯关与评审记录）：`uv run python -m app.db.seed_demo`。
+
+**一键重建整库**（删库 → 迁移 → 全部种子 → 演示数据）：`uv run python -m app.db.build_db`；
+`--without-demo` 只建到岗位 / 技能 / 项目，`--keep-db` 不删库、只把种子补齐（幂等）。
+
+岗位 / 技能体系 / 技能点 / 实训项目的**数据底稿在 `app/db/seed_growth.py`**
+（取自《岗位能力与技能点归纳》）：4 个技能体系、35 个技能点、10 个岗位、11 个示例项目，
+岗位-技能矩阵（§6 的 ● 与 ○）、项目-技能关联、关卡的填写引导子标题也都在这个文件里。
+基础种子 `app/db/seed.py` 与演示数据 `app/db/seed_demo.py` 都调它写库，改数据只改这一处。
 
 注意：**MinIO 是必需组件**（存储层只实现了 S3 协议，没有本地磁盘后端），Milvus 与模型
 只在用知识库时才需要。没连上 MinIO 时上传接口会直接报"未配置 S3 接入信息"。
@@ -91,7 +103,7 @@ uv run alembic upgrade head                              # 执行迁移
 uv run alembic revision -m "说明"                        # 新建迁移
 uv run python scripts/check_schema_parity.py             # ORM 与 DDL 草稿比对
 uv run python scripts/reindex_knowledge.py --pending      # 重建/补齐 Milvus 索引
-uv run python scripts/set_llm_config.py --show           # 看主模型配置（api key 打码）
+uv run python scripts/set_llm_config.py --show           # 看大模型配置（默认模型 + kimi/mimo，key 打码）
 uv run python scripts/prune_qa_history.py --dry-run      # 看会清理掉哪些过期问答会话
 uv run python scripts/dispatch_publish_tasks.py --dry-run # 看有哪些定时任务到了要发布的点
 uv run python scripts/dispatch_publish_tasks.py          # 发布到点的定时任务（挂 cron，每分钟一次）
@@ -135,19 +147,20 @@ curl -X POST http://127.0.0.1:8000/api/submissions/{submission_id}/ai-review
 | GET | `/api/qa/sessions/{id}/messages` | 历史消息，`before_id` 游标往前翻 |
 | PATCH | `/api/qa/sessions/{id}` | 改名 / 关闭 / 重开 |
 | DELETE | `/api/qa/sessions/{id}` | 删除会话（连带消息与引用） |
-| POST | `/api/qa/sessions/{id}/ask` | 提问，默认 SSE 流式；`stream=false` 返回一次性 JSON |
+| POST | `/api/qa/sessions/{id}/ask` | 提问，默认 SSE 流式；`stream=false` 返回一次性 JSON。`model` 选 `deepseek` / `kimi` / `mimo`（见 `ai.llm.models`），留空用默认模型 |
 | GET | `/api/qa/usage` | token 用量统计（当日 / 保留期内，只统计不限制） |
 
 ```bash
 # 非流式（脚本化验收、排查问题用这个）
 curl -X POST http://127.0.0.1:8000/api/qa/sessions/1/ask \
   -H 'Content-Type: application/json' \
-  -d '{"student_id":1,"question":"什么是三端稳压管？","stream":false}'
+  -d '{"student_id":1,"question":"什么是三端稳压管？","stream":false,"model":"deepseek"}'
 
-# 流式：POST + fetch 读流（SSE 的事件是 meta → delta* → done / error）
+# 流式：POST + fetch 读流（SSE 的事件是 meta → delta* → done / error，
+# meta 里带 model / model_key / model_label，前端据此显示"这条是谁回答的"）
 curl -N -X POST http://127.0.0.1:8000/api/qa/sessions/1/ask \
   -H 'Content-Type: application/json' \
-  -d '{"student_id":1,"question":"BGE-M3 稀疏向量怎么用？","stream":true}'
+  -d '{"student_id":1,"question":"BGE-M3 稀疏向量怎么用？","stream":true,"model":"kimi"}'
 ```
 
 两个运维口径：
@@ -232,7 +245,7 @@ curl -X POST http://127.0.0.1:8000/api/publish-tasks \
 | GET | `/api/students/{student_id}/training-projects` | 已发布实训项目 + 最高分、关卡进度（总/完成）、所属岗位、关联技能点、项目状态 |
 | GET | `/api/students/{student_id}/my-projects` | 我的实训（自己挑的 ∪ 老师点名必修的），带 `picked` / `is_required` / `sources` |
 | POST / PATCH / DELETE | `/api/students/{student_id}/my-projects…` | 加入（批量幂等）/ 覆盖式排序 / 移出 |
-| GET | `/api/students/{student_id}/job-project-progress` | 所选岗位上实训项目的分档进度：基础 / 进阶 / 拓展各多少关，各完成多少（`job_id` 可指定岗位） |
+| GET | `/api/students/{student_id}/project-progress` | 实训项目分档进度：按基础 / 进阶 / 拓展各多少个、该学生完成多少个。`scope` 选分母口径：`ALL` 全部已发布项目（默认）/ `SELF` 我自主选择的 / `TEACHER` 老师下发的（都不按岗位过滤） |
 | GET | `/api/students/{student_id}/projects/{project_id}` | 项目详情：任务简介 + 关卡（含每个子标题的简介）+ 本轮已保存的作答 + 历史提交次数/日期与 AI、教师评语 |
 
 ```bash
@@ -240,7 +253,7 @@ curl http://127.0.0.1:8000/api/students/1/job-recommendations
 curl http://127.0.0.1:8000/api/students/1/skill-tree-progress
 curl http://127.0.0.1:8000/api/students/1/training-projects
 curl http://127.0.0.1:8000/api/students/1/my-projects
-curl http://127.0.0.1:8000/api/students/1/job-project-progress
+curl "http://127.0.0.1:8000/api/students/1/project-progress?scope=TEACHER"
 curl http://127.0.0.1:8000/api/students/1/projects/1
 ```
 
@@ -251,8 +264,10 @@ curl http://127.0.0.1:8000/api/students/1/projects/1
 关卡进度 =
 `project_module` 的关卡数与最新一轮闯关 `attempt_stage.is_filled` 的个数（重新挑战从 0 重新计，
 最高分保留）。没关联技能的岗位不参与推荐；学生没开始过的项目也会在实训项目列表里返回
-（`status=NOT_STARTED`、成绩 null、进度 0/关卡总数）。岗位项目进度不传 `job_id` 时取学生当前
-主岗位（没有主岗位取最近选的），一个岗位都没选就返回 `job_id=null` + 三档全 0。
+（`status=NOT_STARTED`、成绩 null、进度 0/关卡总数）。实训项目进度（`project-progress`）
+的分母由 `scope` 决定，三种口径都只算**已发布项目**、都与岗位无关 —— 所以学生做完别的岗位
+的项目也会算进 `ALL`；岗位维度的项目数看 `job-recommendations` 的 `project_total_count` /
+`project_done_count`。`SELF` 取学生自己加进「我的实训」的项目，`TEACHER` 取任务点名必修的项目。
 
 > **口径**：`training_project.status = 'PUBLISHED'` 就是**对学生开放**——教师发布项目后，
 > 学生端实训项目列表里立刻能看到并开始闯关，不用等任务；任务只把项目标成"必修"，
@@ -268,7 +283,7 @@ curl http://127.0.0.1:8000/api/students/1/projects/1
 项目详情里的关卡子标题取自 `project_module.items_json`（**由教师在项目里手填，模块库不预设**），
 每项是 `{"title": "检测对象描述", "prompt": "工件名称、材质、尺寸范围"}`：`prompt` 就是子标题的
 填写简介，学生端在子标题下直接展示。案例项目（`scripts/seed_case_project.py`）的七个关卡、
-34 个子标题已经全部写好简介；演示项目见 `app/db/seed_demo.py` 的 `PROJECT_MODULE_ITEMS`。
+34 个子标题已经全部写好简介；示例项目的子标题见 `app/db/seed_growth.py` 的 `PROJECT_MODULE_ITEMS`。
 
 项目详情里每关的 `answer_text` 就是**本轮已保存的作答**（草稿也算），`current_attempt_id` +
 每关的 `attempt_stage_id` 用来调下面的保存接口；重新进来时直接把这批内容填回作答框即可接着写。
@@ -361,3 +376,9 @@ models/            本地模型权重（gitignore）
 （需求分析、方案设计、数据处理、模型训练、模型优化、模型测试、实训报告上传，
 权重 10/15/15/20/15/15/10）。如与最终评审口径不同，改 `app/db/seed.py` 后重新执行
 `uv run python -m app.db.init_db` 即可（种子幂等，不会重复插入）。
+
+岗位 / 技能体系 / 技能点取自《岗位能力与技能点归纳》§5.1 与 §5.2（去掉 PM 与「项目管理系」），
+岗位-技能矩阵取 §6 的 ● 与 ○；其中 11 个实训项目里只有 3 个是文档点名的既有项目
+（工业缺陷检测实训 / 表面缺陷分类进阶 / 成像系统搭建实训），其余 8 个是**示例数据**
+（按"每个岗位至少 1 个已发布项目、35 个技能点都有项目覆盖"补的）。要换成真实项目，
+改 `app/db/seed_growth.py` 的 `PROJECTS` 与 `PROJECT_SKILLS` 即可。

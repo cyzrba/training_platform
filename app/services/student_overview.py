@@ -5,7 +5,7 @@
 - ``GET /api/students/{student_id}/job-recommendations`` —— 岗位推荐
 - ``GET /api/students/{student_id}/skill-tree-progress`` —— 技能树总览
 - ``GET /api/students/{student_id}/training-projects`` —— 实训项目列表（最高分 / 关卡进度）
-- ``GET /api/students/{student_id}/job-project-progress`` —— 所选岗位上项目的分档进度
+- ``GET /api/students/{student_id}/project-progress`` —— 全部已发布项目的分档进度
 - ``GET /api/students/{student_id}/projects/{project_id}`` —— 单个项目的全量详情
   （任务简介、关卡与子标题、提交历史与 AI/教师评语）
 
@@ -26,6 +26,7 @@
 """
 
 from collections.abc import Iterable
+from enum import StrEnum
 
 from sqlmodel import func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -49,7 +50,6 @@ from app.models.job_skill import (
     ProjectSkill,
     SkillNode,
     SkillTree,
-    StudentJob,
     StudentSkill,
 )
 from app.models.project import ProjectModule, ProjectStageTemplate, TrainingProject
@@ -57,6 +57,14 @@ from app.models.review import ReviewRecord
 
 #: 进度达到 100 才算"已完成 / 已精通"
 MASTERED_PROGRESS = 100.0
+
+
+class ProjectProgressScope(StrEnum):
+    """实训项目进度的**分母口径**（学生端「实训进度概览」的三个切换项）。"""
+
+    ALL = "ALL"  # 全部已发布项目
+    SELF = "SELF"  # 学生自己加进「我的实训」的项目
+    TEACHER = "TEACHER"  # 老师发任务点名必修的项目
 
 
 def _percent(values: Iterable[float]) -> float:
@@ -545,62 +553,44 @@ def _ratio_percent(part: int, whole: int) -> float:
     return round(part * 100 / whole, 2)
 
 
-async def _resolve_job(session: AsyncSession, student_id: int, job_id: int | None) -> tuple[Job | None, bool]:
-    """定位要统计的岗位：显式传 job_id 就用它，否则取学生当前主岗位（没有主岗位取最近选的）。
-
-    返回值第二项表示"这个岗位是不是学生当前的主岗位"。
-    """
-    if job_id is not None:
-        job = await session.get(Job, job_id)
-        if job is None:
-            raise NotFoundError(f"岗位 {job_id} 不存在")
-        selection = (
-            await session.exec(
-                select(StudentJob).where(
-                    StudentJob.student_id == student_id,
-                    StudentJob.job_id == job_id,
-                    StudentJob.is_primary.is_(True),  # type: ignore[attr-defined]
-                )
-            )
-        ).first()
-        return job, selection is not None
-
-    stmt = (
-        select(StudentJob)
-        .where(StudentJob.student_id == student_id)
-        .order_by(StudentJob.is_primary.desc(), StudentJob.id.desc())  # type: ignore[attr-defined]
-        .limit(1)
-    )
-    selection = (await session.exec(stmt)).first()
-    if selection is None:
-        return None, False
-    job = await session.get(Job, selection.job_id)
-    return job, bool(selection.is_primary)
+async def _scope_project_ids(
+    session: AsyncSession, student_id: int, scope: ProjectProgressScope
+) -> set[int]:
+    """按口径取分母项目集合：三种口径都先与"全部已发布项目"求交，草稿 / 已下架永不计入。"""
+    published = await _published_project_ids(session)
+    if scope is ProjectProgressScope.SELF:
+        picked = await StudentProjectPickRepository(session).list_of_student(student_id)
+        return published & {int(row.project_id) for row in picked}
+    if scope is ProjectProgressScope.TEACHER:
+        required = await _required_projects(session, student_id)
+        return published & set(required)
+    return published
 
 
-async def job_project_progress(session: AsyncSession, student_id: int, *, job_id: int | None = None) -> dict:
-    """学生所选岗位上的实训项目进度：按基础 / 进阶 / 拓展三档统计"总数 / 已完成数"。
+async def project_progress(
+    session: AsyncSession,
+    student_id: int,
+    *,
+    scope: ProjectProgressScope = ProjectProgressScope.ALL,
+) -> dict:
+    """学生的实训项目进度：按基础 / 进阶 / 拓展三档统计"总数 / 已完成数"。
 
-    - 岗位取 ``job_id`` 指定的那个；不传时取学生当前主岗位，没有主岗位则取最近选的一个；
-      一个岗位都没选时返回 ``job_id=null`` 且三档全 0，前端可据此引导去选岗；
-    - 传了不存在的 ``job_id`` 直接报"岗位不存在"，避免把笔误当成"没选岗位"；
-    - 只统计该岗位下**已发布**的项目（口径同 ``student_projects``：发布即可见，与任务无关）；
+    - **分母** 由 ``scope`` 决定（三种口径都只算已发布项目）：
+      ``ALL`` 全部已发布项目 —— 学生能看到并闯关任何一个（口径见 docs/方案设计.md §4.2），
+      ``SELF`` 学生自己加进「我的实训」的项目，``TEACHER`` 老师发任务点名必修的项目；
+    - 草稿 / 已下架项目在任何口径下都不计；
     - 已完成 = 该学生 ``student_project.completed_at`` 有值（与技能进度的完成判定同源）。
     """
-    job, is_primary = await _resolve_job(session, student_id, job_id)
+    project_ids = await _scope_project_ids(session, student_id, scope)
     labels = _level_labels()
 
     totals: dict[str, int] = {}
     completed: dict[str, int] = {}
-    if job is not None:
-        filters = (
-            TrainingProject.job_id == job.id,
-            TrainingProject.status == "PUBLISHED",
-            TrainingProject.deleted_at.is_(None),  # type: ignore[attr-defined]
-        )
+    if project_ids:
+        in_scope = TrainingProject.id.in_(list(project_ids))  # type: ignore[attr-defined]
         total_stmt = (
             select(TrainingProject.project_level, func.count())
-            .where(*filters)
+            .where(in_scope)
             .group_by(TrainingProject.project_level)
         )
         totals = {str(level): int(count) for level, count in (await session.exec(total_stmt)).all()}
@@ -609,7 +599,7 @@ async def job_project_progress(session: AsyncSession, student_id: int, *, job_id
             select(TrainingProject.project_level, func.count())
             .join(StudentProject, StudentProject.project_id == TrainingProject.id)  # type: ignore[arg-type]
             .where(
-                *filters,
+                in_scope,
                 StudentProject.student_id == student_id,
                 StudentProject.completed_at.is_not(None),  # type: ignore[attr-defined]
             )
@@ -633,9 +623,7 @@ async def job_project_progress(session: AsyncSession, student_id: int, *, job_id
 
     return {
         "student_id": student_id,
-        "job_id": int(job.id) if job is not None else None,
-        "job_name": job.job_name if job is not None else None,
-        "is_primary": is_primary,
+        "scope": scope.value,
         "total": sum(item["total"] for item in level_items),
         "completed": sum(item["completed"] for item in level_items),
         "levels": level_items,
@@ -883,8 +871,9 @@ async def student_project_detail(session: AsyncSession, student_id: int, project
 
 __all__ = [
     "MASTERED_PROGRESS",
-    "job_project_progress",
+    "ProjectProgressScope",
     "my_projects",
+    "project_progress",
     "recommend_jobs",
     "skill_tree_progress",
     "student_project_detail",

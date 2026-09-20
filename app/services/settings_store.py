@@ -14,6 +14,7 @@ from typing import Any
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import BASE_DIR
+from app.core.exceptions import BusinessRuleError
 from app.crud.account import SystemConfigRepository
 
 #: 进程内缓存时长（秒）
@@ -22,6 +23,8 @@ CACHE_TTL_SECONDS = 60
 EMBEDDING_KEY = "ai.embedding"
 RERANKER_KEY = "ai.reranker"
 LLM_KEY = "ai.llm"
+#: 默认模型选项 id（与前端 Student/src/config/models.ts 对齐）；它在 ai.llm 里用平铺字段配置
+DEFAULT_LLM_MODEL = "deepseek"
 MILVUS_KEY = "rag.vector_store"
 RETRIEVAL_KEY = "rag.retrieval"
 QA_KEY = "ai.qa"
@@ -55,6 +58,28 @@ DEFAULTS: dict[str, dict[str, Any]] = {
         "temperature": 0.2,
         "timeout": 60,
         "max_tokens": 4096,
+        # 以上平铺字段 = **默认模型**（DeepSeek）的一套配置；
+        # 下面按「模型选项 id」再挂几家，学生端 AI 助教选到谁就连谁。
+        # 每项只需写要覆盖的字段（通常就是 base_url / model / api_key），
+        # 其余字段（temperature / timeout / max_tokens…）沿用默认那套。
+        # id 必须与前端 Student/src/config/models.ts 的选项 id 一致。
+        "models": {
+            "kimi": {
+                "label": "Kimi",
+                "provider": "openai-compatible",
+                "base_url": "https://api.moonshot.cn/v1",  # 月之暗面（Moonshot）OpenAI 兼容地址
+                "model": "kimi-latest",  # 按账号可用模型改，如 kimi-k2-0905-preview
+                "api_key": "",
+            },
+            "mimo": {
+                "label": "MiMo",
+                "provider": "openai-compatible",
+                # MiMo 的 OpenAI 兼容地址与模型名请在拿到账号后填这两项
+                "base_url": "",
+                "model": "",
+                "api_key": "",
+            },
+        },
     },
     MILVUS_KEY: {
         "provider": "milvus",
@@ -157,7 +182,11 @@ class MilvusConfig:
 
 @dataclass(frozen=True)
 class LLMConfig:
-    """主模型（OpenAI 兼容接口）配置：换模型 / 换 key 只改配置，不动代码。"""
+    """一次调用要用的大模型配置（OpenAI 兼容接口）：换模型 / 换 key 只改配置，不动代码。
+
+    ``key`` 是学生端选项 id（见 ``Student/src/config/models.ts``，如 ``deepseek`` / ``kimi``），
+    ``label`` 是给人看的名字；默认模型那一套也用 ``deepseek`` 这个 key。
+    """
 
     provider: str
     base_url: str
@@ -166,11 +195,23 @@ class LLMConfig:
     temperature: float
     timeout: int
     max_tokens: int
+    key: str = DEFAULT_LLM_MODEL
+    label: str = ""
 
     @property
     def configured(self) -> bool:
         """没填 api key 时调用方应先给出可读的提示，而不是等 SDK 抛鉴权错误。"""
         return bool(self.api_key.strip())
+
+    @property
+    def has_endpoint(self) -> bool:
+        """接口地址与模型名都填了才谈得上调用（新增一家模型时先配这两项）。"""
+        return bool(self.base_url.strip()) and bool(self.model.strip())
+
+    @property
+    def display_name(self) -> str:
+        """报错文案里用的名字：优先 label，其次 key。"""
+        return self.label.strip() or self.key
 
 
 @dataclass(frozen=True)
@@ -264,17 +305,84 @@ async def get_milvus_config(session: AsyncSession) -> MilvusConfig:
     )
 
 
-async def get_llm_config(session: AsyncSession) -> LLMConfig:
+def _llm_models(raw: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """把默认骨架与表里的 ``models`` 逐家合并：表里没写到的家仍然保留骨架（便于看到该配什么）。"""
+    skeleton = DEFAULTS[LLM_KEY].get("models") or {}
+    merged: dict[str, dict[str, Any]] = {key: dict(value) for key, value in skeleton.items()}
+    stored = raw.get("models")
+    if isinstance(stored, dict):
+        for key, value in stored.items():
+            if isinstance(value, dict):
+                merged[str(key)] = {**merged.get(str(key), {}), **value}
+    return merged
+
+
+async def get_llm_config(session: AsyncSession, model: str | None = None) -> LLMConfig:
+    """取某个模型选项要用的配置。
+
+    ``ai.llm`` 的平铺字段是**默认模型**（``DEFAULT_LLM_MODEL``，当前是 DeepSeek）那一套；
+    ``ai.llm.models.<key>`` 里按学生端选项 id 再挂别家（kimi / mimo…）。
+
+    **不继承的字段**：``base_url`` / ``model`` / ``api_key`` —— 这几项每家必须自己写，
+    避免"Kimi 没填 key 却悄悄用 DeepSeek 的 key"这种错；``provider`` / ``temperature`` /
+    ``timeout`` / ``max_tokens`` 沿用默认那套。
+
+    ``model`` 给不认识的值时报 422（而不是悄悄回落默认模型），错误信息里列出可选值。
+    """
     raw = await _raw(session, LLM_KEY)
+    key = (model or "").strip() or DEFAULT_LLM_MODEL
+    if key == DEFAULT_LLM_MODEL:
+        return LLMConfig(
+            provider=str(raw.get("provider", "openai-compatible")),
+            base_url=str(raw.get("base_url", "https://api.deepseek.com/v1")),
+            model=str(raw.get("model", "deepseek-v4-flash")),
+            api_key=str(raw.get("api_key") or ""),
+            temperature=float(raw.get("temperature", 0.2)),
+            timeout=int(raw.get("timeout", 60)),
+            max_tokens=int(raw.get("max_tokens", 4096)),
+            key=key,
+            label=str(raw.get("label") or "DeepSeek"),
+        )
+
+    models = _llm_models(raw)
+    extra = models.get(key)
+    if extra is None:
+        options = "、".join(sorted({DEFAULT_LLM_MODEL, *models}))
+        raise BusinessRuleError(f"没有这个模型选项「{key}」，现在可选：{options}")
     return LLMConfig(
-        provider=str(raw.get("provider", "openai-compatible")),
-        base_url=str(raw.get("base_url", "https://api.deepseek.com/v1")),
-        model=str(raw.get("model", "deepseek-v4-flash")),
-        api_key=str(raw.get("api_key") or ""),
-        temperature=float(raw.get("temperature", 0.2)),
-        timeout=int(raw.get("timeout", 60)),
-        max_tokens=int(raw.get("max_tokens", 4096)),
+        provider=str(extra.get("provider") or raw.get("provider", "openai-compatible")),
+        base_url=str(extra.get("base_url") or ""),
+        model=str(extra.get("model") or ""),
+        api_key=str(extra.get("api_key") or ""),
+        temperature=float(extra.get("temperature", raw.get("temperature", 0.2))),
+        timeout=int(extra.get("timeout", raw.get("timeout", 60))),
+        max_tokens=int(extra.get("max_tokens", raw.get("max_tokens", 4096))),
+        key=key,
+        label=str(extra.get("label") or key),
     )
+
+
+async def list_llm_models(session: AsyncSession) -> list[dict[str, Any]]:
+    """列出可选模型（默认模型 + ``ai.llm.models`` 里的各家），带"配没配齐"的状态。
+
+    给接口/前端做"哪些模型现在能用"的展示用；api_key 一律不返回，只返回是否已配置。
+    """
+    raw = await _raw(session, LLM_KEY)
+    keys = [DEFAULT_LLM_MODEL, *_llm_models(raw).keys()]
+    items: list[dict[str, Any]] = []
+    for key in dict.fromkeys(keys):
+        config = await get_llm_config(session, key)
+        items.append(
+            {
+                "key": key,
+                "label": config.display_name,
+                "model": config.model,
+                "base_url": config.base_url,
+                "has_endpoint": config.has_endpoint,
+                "configured": config.configured,
+            }
+        )
+    return items
 
 
 async def get_retrieval_config(session: AsyncSession) -> RetrievalConfig:
@@ -310,6 +418,7 @@ async def get_qa_config(session: AsyncSession) -> QaConfig:
 __all__ = [
     "CACHE_TTL_SECONDS",
     "DEFAULTS",
+    "DEFAULT_LLM_MODEL",
     "LLM_KEY",
     "EmbeddingConfig",
     "LLMConfig",
@@ -325,4 +434,5 @@ __all__ = [
     "get_reranker_config",
     "get_retrieval_config",
     "invalidate",
+    "list_llm_models",
 ]

@@ -1,7 +1,14 @@
-"""种子数据（幂等）。
+"""基础种子数据（幂等）。
 
-覆盖：角色、权限点、角色权限、管理员账号、成长规则、技能树体系、七大标准模块库、系统配置。
-标准模块与技能树取值来自《需求确认书 0706》，如评审有调整，改这里重跑即可。
+覆盖：角色、权限点、角色权限、管理员账号、成长规则、七大标准模块库、系统配置，
+以及**岗位 / 技能体系 / 技能点 / 实训项目**（数据底稿在 ``app/db/seed_growth.py``，
+取自《岗位能力与技能点归纳》，见该模块的说明）。
+
+标准模块库取值来自《需求确认书 0706》，如评审有调整，改这里重跑即可；
+想知道"某个岗位/技能点/项目为什么长这样"，看 ``seed_growth.py``。
+
+建库入口：``uv run python -m app.db.init_db``（迁移 + 本模块）；
+连演示数据（教师 / 班级 / 学生 / 闯关记录）一起重建：``uv run python -m app.db.build_db``。
 """
 
 from decimal import Decimal
@@ -11,6 +18,7 @@ from sqlmodel import SQLModel, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.db import SessionLocal
+from app.db.seed_growth import run_growth_seed
 from app.models.account import (
     SysPermission,
     SysRole,
@@ -19,7 +27,7 @@ from app.models.account import (
     SysUser,
     SysUserRole,
 )
-from app.models.job_skill import GrowthRule, SkillTree
+from app.models.job_skill import GrowthRule
 from app.models.project import ProjectStageTemplate
 from app.services.password import default_password_hash
 
@@ -106,26 +114,6 @@ STAGE_TEMPLATES: list[dict[str, Any]] = [
     },
 ]
 
-#: 技能树四大体系（需求确认书 2.3「技能树」）
-SKILL_TREES: list[dict[str, str]] = [
-    {
-        "tree_name": "光学成像系",
-        "description": "光源、镜头、相机选型与成像调优",
-    },
-    {
-        "tree_name": "传统算法系",
-        "description": "图像预处理、特征提取与形态学处理",
-    },
-    {
-        "tree_name": "深度学习系",
-        "description": "检测、分割、分类模型的训练与优化",
-    },
-    {
-        "tree_name": "系统部署系",
-        "description": "模型部署、产线联调与工程化交付",
-    },
-]
-
 GROWTH_RULES: list[dict[str, Any]] = [
     {
         "level_type": "BASIC",
@@ -208,8 +196,26 @@ SYSTEM_CONFIGS: list[dict[str, Any]] = [
             "temperature": 0.2,
             "timeout": 60,
             "max_tokens": 4096,
+            # 以上是**默认模型**（DeepSeek）那套；下面按学生端选项 id 挂别家，
+            # 每项只需写 base_url / model / api_key（api_key 必须各自填，不继承默认的）
+            "models": {
+                "kimi": {
+                    "label": "Kimi",
+                    "provider": "openai-compatible",
+                    "base_url": "https://api.moonshot.cn/v1",
+                    "model": "kimi-latest",
+                    "api_key": "",
+                },
+                "mimo": {
+                    "label": "MiMo",
+                    "provider": "openai-compatible",
+                    "base_url": "",
+                    "model": "",
+                    "api_key": "",
+                },
+            },
         },
-        "description": "主模型（DeepSeek，OpenAI 兼容接口）参数与 api key",
+        "description": "大模型配置：默认模型（DeepSeek）+ 可选模型 kimi / mimo 各自的地址与 key",
     },
     {
         "config_key": "rag.vector_store",
@@ -287,6 +293,12 @@ async def run_seed(session: AsyncSession | None = None) -> dict[str, int]:
         "users": 0,
         "stage_templates": 0,
         "skill_trees": 0,
+        "skill_nodes": 0,
+        "jobs": 0,
+        "job_skills": 0,
+        "projects": 0,
+        "project_modules": 0,
+        "project_skills": 0,
         "growth_rules": 0,
         "system_configs": 0,
     }
@@ -348,14 +360,9 @@ async def run_seed(session: AsyncSession | None = None) -> dict[str, int]:
             )
             stats["stage_templates"] += int(created)
 
-        for item in SKILL_TREES:
-            _, created = await _get_or_create(
-                session,
-                SkillTree,
-                {"description": item["description"]},
-                tree_name=item["tree_name"],
-            )
-            stats["skill_trees"] += int(created)
+        # 岗位 / 技能体系 / 技能点 / 实训项目：底稿见 app/db/seed_growth.py
+        for key, value in (await run_growth_seed(session)).items():
+            stats[key] = stats.get(key, 0) + value
 
         for item in GROWTH_RULES:
             _, created = await _get_or_create(

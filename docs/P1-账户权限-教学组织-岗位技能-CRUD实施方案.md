@@ -121,7 +121,7 @@ flowchart LR
 | PATCH | `/api/students/{student_id}/skills/{skill_id}` | 手工调整（`source=MANUAL`） | SKILL_MANAGE |
 | GET | `/api/students/{student_id}/job-recommendations` | 岗位推荐（默认前三名，按技能匹配度倒序，技能点按体系分组） | 登录学生本人 |
 | GET | `/api/students/{student_id}/skill-tree-progress` | 技能树总览（全部技能树与技能点 + 单树/整体进度与技能点统计） | 登录学生本人 |
-| GET | `/api/students/{student_id}/job-project-progress` | 所选岗位的项目分档进度（基础/进阶/拓展各多少关、各完成多少，`job_id` 可选） | 登录学生本人 |
+| GET | `/api/students/{student_id}/project-progress` | 实训项目分档进度：按基础 / 进阶 / 拓展统计（各多少个、各完成多少），`scope` 选分母口径（全部 / 我自主选择的 / 老师下发的） | 登录学生本人 |
 | GET | `/api/students/{student_id}/projects/{project_id}` | 项目详情（任务简介 / 关卡与子标题简介 / 本轮已保存的作答 / 历史提交与 AI·教师评语） | 登录学生本人 |
 | PUT | `/api/attempts/{attempt_id}/answers` | 保存作答（草稿）：一次存多个关卡，默认不改关卡完成状态，下次进来接着写 | 登录学生本人 |
 

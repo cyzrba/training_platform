@@ -187,10 +187,21 @@ async def _session_or_404(
     return row
 
 
-async def begin_turn(session: AsyncSession, *, student_id: int, session_id: int, question: str) -> QaTurn:
-    """校验 + 落 USER 消息 + 拼 prompt，返回可交给 :func:`stream_answer` 的上下文。"""
+async def begin_turn(
+    session: AsyncSession,
+    *,
+    student_id: int,
+    session_id: int,
+    question: str,
+    model: str | None = None,
+) -> QaTurn:
+    """校验 + 落 USER 消息 + 拼 prompt，返回可交给 :func:`stream_answer` 的上下文。
+
+    ``model`` 是学生在 AI 助教里选的模型选项 id（``deepseek`` / ``kimi`` / ``mimo``…），
+    留空用默认模型；取值见 ``settings_store.get_llm_config``。
+    """
     config = await settings_store.get_qa_config(session)
-    llm_config = await settings_store.get_llm_config(session)
+    llm_config = await settings_store.get_llm_config(session, model)
     text = (question or "").strip()
     if not text:
         raise BusinessRuleError("问题不能为空")
@@ -292,12 +303,27 @@ async def stream_answer(session: AsyncSession, turn: QaTurn) -> AsyncIterator[tu
             "session_id": turn.session_id,
             "message_id": turn.user_message.id,
             "model": turn.llm_config.model if turn.llm_config else None,
+            "model_key": turn.llm_config.key if turn.llm_config else None,
+            "model_label": turn.llm_config.display_name if turn.llm_config else None,
             "created_at": turn.user_message.created_at.isoformat(),
         },
     )
     try:
-        if turn.llm_config is None or not turn.llm_config.configured:
+        if turn.llm_config is None:
             raise BusinessRuleError("还没配置大模型 api key：请在系统配置 ai.llm 里填 api_key")
+        if not turn.llm_config.has_endpoint:
+            # 新增一家模型时最常见的漏配：接口地址 / 模型名没填
+            raise BusinessRuleError(
+                f"{turn.llm_config.display_name} 的接口地址或模型名还没配："
+                f"请在系统配置 ai.llm.models.{turn.llm_config.key} 里填 base_url 与 model"
+            )
+        if not turn.llm_config.configured:
+            where = (
+                "ai.llm 里填 api_key"
+                if turn.llm_config.key == settings_store.DEFAULT_LLM_MODEL
+                else f"ai.llm.models.{turn.llm_config.key} 里填 api_key"
+            )
+            raise BusinessRuleError(f"{turn.llm_config.display_name} 还没配置 api key：请在系统配置 {where}")
         async for delta, chunk_usage in llm.stream_chat(
             turn.llm_config,
             system_prompt=turn.system_prompt,
@@ -344,13 +370,22 @@ async def stream_answer(session: AsyncSession, turn: QaTurn) -> AsyncIterator[tu
     )
 
 
-async def answer_once(session: AsyncSession, *, student_id: int, session_id: int, question: str) -> QaAnswer:
+async def answer_once(
+    session: AsyncSession,
+    *,
+    student_id: int,
+    session_id: int,
+    question: str,
+    model: str | None = None,
+) -> QaAnswer:
     """非流式提问：内部消费同一条流式链路，把增量拼成完整回答返回。
 
     走同一条链路是为了让"落库时机、失败处理、权限校验"只有一份实现 —— 脚本化验收
     和集成测试因此不必解析 SSE。
     """
-    turn = await begin_turn(session, student_id=student_id, session_id=session_id, question=question)
+    turn = await begin_turn(
+        session, student_id=student_id, session_id=session_id, question=question, model=model
+    )
     payload: dict[str, Any] | None = None
     async for event, data in stream_answer(session, turn):
         if event == "error":

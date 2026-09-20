@@ -241,7 +241,11 @@ async def delete_qa_session(
 async def ask_question(session_id: int, payload: QaAskIn, session: DbSession) -> Any:
     if not payload.stream:
         result = await qa.answer_once(
-            session, student_id=payload.student_id, session_id=session_id, question=payload.question
+            session,
+            student_id=payload.student_id,
+            session_id=session_id,
+            question=payload.question,
+            model=payload.model,
         )
         body = QaAskOut(
             message=AiQaMessageRead.model_validate(result.message),
@@ -259,7 +263,11 @@ async def ask_question(session_id: int, payload: QaAskIn, session: DbSession) ->
         return JSONResponse(content=jsonable_encoder(body))
 
     turn = await qa.begin_turn(
-        session, student_id=payload.student_id, session_id=session_id, question=payload.question
+        session,
+        student_id=payload.student_id,
+        session_id=session_id,
+        question=payload.question,
+        model=payload.model,
     )
 
     async def event_stream() -> AsyncIterator[str]:

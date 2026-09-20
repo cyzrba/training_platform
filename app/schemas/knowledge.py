@@ -171,6 +171,10 @@ class QaAskIn(SQLModel):
     student_id: int = Field(description="学生 ID（sys_user.id）")
     question: str = Field(min_length=1, description="本轮问题")
     stream: bool = Field(default=True, description="true 走 SSE 流式；false 一次性返回 JSON")
+    model: str | None = Field(
+        default=None,
+        description="模型选项 id（deepseek / kimi / mimo…，见 ai.llm.models）；留空用默认模型",
+    )
 
 
 class QaUsageOut(SQLModel):

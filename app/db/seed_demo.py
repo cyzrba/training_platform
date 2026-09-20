@@ -1,10 +1,15 @@
-"""演示数据：教师 / 班级 / 学生 / 技能树与技能点 / 岗位 / 岗位技能 / 学生选岗（幂等）。
+"""演示数据：教师 / 班级 / 学生 / 学生选岗 / 项目附件 / 任务下发 / 闯关与评审（幂等）。
 
 用法：``uv run python -m app.db.seed_demo``
 
 用途：本地联调与前端演示。数据形态刻意做得不均匀 —— 有的班级带分组、有的不带，
 有的老师带两个班；学生大多只选一个岗位，部分学生多看一个岗位，少数学生演示过"换主岗位"。
 重复执行只补缺失的部分，不会重复插入。
+
+岗位 / 技能体系 / 技能点 / 实训项目**不在本模块定义**：它们的数据底稿在
+``app/db/seed_growth.py``（取自《岗位能力与技能点归纳》），本模块只是调用
+``run_growth_seed`` 把它写进库，再在其上铺班级、学生与闯关记录。这几个名字继续从本模块
+导出，是为了让 ``tests/test_seed_demo.py`` 这类调用方不用改导入路径。
 
 账号说明：老师与学生都会建 ``sys_user`` 账号（默认密码见 settings.default_password），
 老师挂 TEACHER 角色、学生挂 STUDENT 角色。
@@ -30,8 +35,6 @@ from app.crud.attempt import (
 )
 from app.crud.job_skill import (
     JobRepository,
-    JobSkillRepository,
-    ProjectSkillRepository,
     SkillNodeRepository,
     SkillTreeRepository,
     StudentJobRepository,
@@ -44,7 +47,6 @@ from app.crud.organization import (
 )
 from app.crud.project import (
     ProjectFileRepository,
-    ProjectModuleRepository,
     StageTemplateRepository,
     TrainingProjectRepository,
 )
@@ -55,7 +57,16 @@ from app.crud.publish import (
     PublishTaskTargetRepository,
 )
 from app.crud.review import ReviewAiJobRepository, ReviewRecordRepository
-from app.db.seed import SKILL_TREES, STAGE_TEMPLATES
+from app.db.seed import STAGE_TEMPLATES
+from app.db.seed_growth import (
+    JOBS,
+    PROJECT_MODULE_ITEMS,
+    PROJECT_SKILLS,
+    PROJECTS,
+    SKILL_NODES,
+    SKILL_TREES,
+    run_growth_seed,
+)
 from app.models.account import SysUser
 from app.models.job_skill import StudentSkill
 from app.services import storage
@@ -70,6 +81,16 @@ from app.services.attempt import (
 )
 from app.services.password import default_password_hash
 from app.services.skill import recalculate_student_skills
+
+__all__ = [
+    "JOBS",
+    "PROJECTS",
+    "PROJECT_MODULE_ITEMS",
+    "PROJECT_SKILLS",
+    "SKILL_NODES",
+    "SKILL_TREES",
+    "run_demo_seed",
+]
 
 # --------------------------------------------------------------------- 教师
 
@@ -234,104 +255,6 @@ CLASSES: tuple[dict[str, Any], ...] = (
     },
 )
 
-# ------------------------------------------------------------------- 技能节点
-#: 技能树名称 -> 节点（node_name, description）
-#: 注：skill_node_dependency（前置技能）本轮先不放数据
-
-SKILL_NODES: dict[str, tuple[tuple[str, str], ...]] = {
-    "光学成像系": (
-        ("光源选型", "按材质与缺陷类型选择光源方案"),
-        ("镜头选型", "按视野与精度要求选择镜头"),
-        ("相机选型", "按分辨率与帧率选择相机"),
-        ("成像调试", "调光圈、曝光与对焦，拿到可用图像"),
-    ),
-    "传统算法系": (
-        ("图像基础", "灰度、通道、色彩空间等基本操作"),
-        ("图像滤波", "去噪与平滑，抑制干扰"),
-        ("边缘检测", "提取轮廓与边界特征"),
-        ("形态学处理", "腐蚀膨胀开闭运算修形"),
-        ("特征提取", "尺寸、面积、位置等特征量化"),
-    ),
-    "深度学习系": (
-        ("深度学习基础", "张量、梯度与训练流程"),
-        ("数据标注", "标注规范与数据集制作"),
-        ("CNN 原理", "卷积、池化与经典网络结构"),
-        ("模型训练", "训练脚本、超参与训练监控"),
-        ("模型调优", "数据增强、调参与效果优化"),
-    ),
-    "系统部署系": (
-        ("Linux 基础", "常用命令与服务器环境配置"),
-        ("Docker 容器", "镜像构建与容器编排"),
-        ("模型服务化", "模型推理服务封装与调用"),
-        ("产线联调", "现场部署与问题定位"),
-    ),
-}
-
-# ---------------------------------------------------------------------- 岗位
-
-JOBS: tuple[dict[str, Any], ...] = (
-    {
-        "job_name": "工业视觉工程师",
-        "direction_tag": "机器视觉",
-        "recommended_level": "BASIC",
-        "scene": "工业缺陷检测实训",
-        "description": "面向产线缺陷检测，负责成像方案与视觉算法落地",
-        "heat": 168,
-        "skill_names": (
-            "图像基础",
-            "图像滤波",
-            "边缘检测",
-            "形态学处理",
-            "光源选型",
-            "成像调试",
-        ),
-    },
-    {
-        "job_name": "视觉算法工程师",
-        "direction_tag": "机器视觉",
-        "recommended_level": "ADVANCED",
-        "scene": "表面缺陷检测进阶",
-        "description": "负责复杂缺陷的特征工程与算法选型调优",
-        "heat": 142,
-        "skill_names": ("图像滤波", "边缘检测", "特征提取", "模型训练", "模型调优"),
-    },
-    {
-        "job_name": "深度学习算法工程师",
-        "direction_tag": "人工智能",
-        "recommended_level": "ADVANCED",
-        "scene": "工业质检模型训练",
-        "description": "负责检测/分割/分类模型的数据、训练与调优",
-        "heat": 155,
-        "skill_names": ("深度学习基础", "数据标注", "CNN 原理", "模型训练", "模型调优"),
-    },
-    {
-        "job_name": "光学成像工程师",
-        "direction_tag": "光学成像",
-        "recommended_level": "BASIC",
-        "scene": "成像系统搭建",
-        "description": "负责光源、镜头、相机选型与成像质量调优",
-        "heat": 96,
-        "skill_names": ("光源选型", "镜头选型", "相机选型", "成像调试"),
-    },
-    {
-        "job_name": "视觉系统集成工程师",
-        "direction_tag": "系统集成",
-        "recommended_level": "EXPANDED",
-        "scene": "产线部署与联调",
-        "description": "负责模型服务化、设备通信与现场联调交付",
-        "heat": 88,
-        "skill_names": ("Linux 基础", "Docker 容器", "模型服务化", "产线联调", "相机选型"),
-    },
-    {
-        "job_name": "数据标注与训练工程师",
-        "direction_tag": "人工智能",
-        "recommended_level": "BASIC",
-        "scene": "数据集建设",
-        "description": "负责标注规范、数据集制作与基础模型训练",
-        "heat": 74,
-        "skill_names": ("数据标注", "深度学习基础", "模型训练"),
-    },
-)
 
 #: 班级 -> 该班默认主岗位
 CLASS_PRIMARY_JOB: dict[str, str] = {
@@ -351,158 +274,6 @@ SECONDARY_JOB_POOL: tuple[str, ...] = (
     "视觉系统集成工程师",
 )
 
-# ---------------------------------------------------------------------- 项目
-#: 项目 + 从模块库里挑的关卡（stage_name, weight, required）
-#: 注：权重合计 100 的项目才是"可发布"状态，这里留一个草稿项目演示未配平的样子
-
-PROJECTS: tuple[dict[str, Any], ...] = (
-    {
-        "project_name": "工业缺陷检测实训",
-        "project_level": "BASIC",
-        "difficulty": 3,
-        "teacher_no": "T2024001",
-        "job_name": "工业视觉工程师",
-        "description": "从需求分析到实训报告的完整闯关流程",
-        "status": "PUBLISHED",
-        "modules": (
-            ("需求分析", 10, True),
-            ("方案设计", 15, True),
-            ("数据处理", 15, True),
-            ("模型训练", 20, True),
-            ("模型优化", 15, True),
-            ("模型测试", 15, True),
-            ("实训报告上传", 10, True),
-        ),
-    },
-    {
-        "project_name": "表面缺陷分类进阶",
-        "project_level": "ADVANCED",
-        "difficulty": 4,
-        "teacher_no": "T2024004",
-        "job_name": "视觉算法工程师",
-        "description": "面向复杂缺陷的分类模型训练与调优",
-        "status": "PUBLISHED",
-        "modules": (
-            ("需求分析", 10, True),
-            ("数据处理", 20, True),
-            ("模型训练", 30, True),
-            ("模型优化", 25, True),
-            ("实训报告上传", 15, True),
-        ),
-    },
-    {
-        "project_name": "成像系统搭建实训",
-        "project_level": "BASIC",
-        "difficulty": 2,
-        "teacher_no": "T2024003",
-        "job_name": "光学成像工程师",
-        "description": "光源/镜头/相机选型与成像调试（草稿：权重还没配到 100）",
-        "status": "DRAFT",
-        "modules": (
-            ("需求分析", 10, True),
-            ("方案设计", 20, True),
-            ("实训报告上传", 10, True),
-        ),
-    },
-)
-
-#: 项目 -> 该项目要训练的技能节点（默认对齐它绑定岗位的技能，按项目特点略作增补）
-PROJECT_SKILLS: dict[str, tuple[str, ...]] = {
-    "工业缺陷检测实训": (
-        "图像基础",
-        "图像滤波",
-        "边缘检测",
-        "形态学处理",
-        "特征提取",
-        "光源选型",
-        "成像调试",
-    ),
-    "表面缺陷分类进阶": (
-        "深度学习基础",
-        "数据标注",
-        "图像滤波",
-        "边缘检测",
-        "特征提取",
-        "模型训练",
-        "模型调优",
-    ),
-    "成像系统搭建实训": ("光源选型", "镜头选型", "相机选型", "成像调试"),
-}
-
-# --------------------------------------------------------------- 填写引导子标题
-#: 项目关卡的填写引导子标题：**由教师手填**，模板不预设。
-#: 这里把三个项目、15 个关卡的子标题都写全，并刻意做出跨项目差异
-#: （检测类讲缺陷定义与打光，成像类讲光源镜头，分类类讲类别平衡与训练监控）。
-PROJECT_MODULE_ITEMS: dict[tuple[str, str], list[dict[str, str]]] = {
-    # ---- 工业缺陷检测实训（机器视觉检测方向）
-    ("工业缺陷检测实训", "需求分析"): [
-        {"title": "检测对象描述", "prompt": "工件名称、材质、尺寸范围"},
-        {"title": "缺陷类型定义", "prompt": "划痕/凹坑/脏污的判定标准"},
-        {"title": "检测精度要求", "prompt": "最小可检缺陷尺寸与误检率上限"},
-    ],
-    ("工业缺陷检测实训", "方案设计"): [
-        {"title": "相机选型方案", "prompt": "面阵/线阵选择与分辨率计算"},
-        {"title": "光源方案", "prompt": "条光/背光/同轴光的打光对比"},
-        {"title": "镜头与视野计算", "prompt": "视野、工作距离与景深核算"},
-    ],
-    ("工业缺陷检测实训", "数据处理"): [
-        {"title": "数据集构建", "prompt": "采集样本数量与正负样本比例"},
-        {"title": "缺陷标注规范", "prompt": "标注框规则与边界处理"},
-    ],
-    ("工业缺陷检测实训", "模型训练"): [
-        {"title": "检测模型选型", "prompt": "YOLO / Faster R-CNN 的取舍"},
-        {"title": "训练配置与增强", "prompt": "超参、数据增强与训练轮次"},
-    ],
-    ("工业缺陷检测实训", "模型优化"): [
-        {"title": "误检漏检优化", "prompt": "针对的问题与采用的优化手段"},
-        {"title": "指标对比", "prompt": "优化前后 mAP 与漏检率对比"},
-    ],
-    ("工业缺陷检测实训", "模型测试"): [
-        {"title": "测试集与指标", "prompt": "测试集构成与评价指标"},
-        {"title": "典型错误案例", "prompt": "误检/漏检样本与原因分析"},
-    ],
-    ("工业缺陷检测实训", "实训报告上传"): [
-        {"title": "报告结构与结论", "prompt": "章节安排与主要结论"},
-        {"title": "问题与改进", "prompt": "遇到的问题与后续改进方向"},
-    ],
-    # ---- 表面缺陷分类进阶（深度学习分类方向）
-    ("表面缺陷分类进阶", "需求分析"): [
-        {"title": "缺陷类别清单", "prompt": "多分类任务的类别与样本量"},
-        {"title": "数据规模与来源", "prompt": "采集设备、标注方式与数据分布"},
-    ],
-    ("表面缺陷分类进阶", "数据处理"): [
-        {"title": "类别平衡策略", "prompt": "长尾类别的处理方式"},
-        {"title": "数据增强方案", "prompt": "几何与颜色增强的组合"},
-    ],
-    ("表面缺陷分类进阶", "模型训练"): [
-        {"title": "模型选型对比", "prompt": "ResNet / EfficientNet / ViT 的取舍"},
-        {"title": "训练超参设置", "prompt": "学习率、batch size 与调度策略"},
-        {"title": "训练过程监控", "prompt": "loss 曲线与过拟合判断"},
-    ],
-    ("表面缺陷分类进阶", "模型优化"): [
-        {"title": "过拟合处理", "prompt": "正则化、早停与数据增广"},
-        {"title": "分类指标对比", "prompt": "准确率、召回率与混淆矩阵"},
-    ],
-    ("表面缺陷分类进阶", "实训报告上传"): [
-        {"title": "实验记录整理", "prompt": "各组实验配置与结果汇总"},
-        {"title": "结论与不足", "prompt": "主要结论与尚存不足"},
-    ],
-    # ---- 成像系统搭建实训（光学成像方向）
-    ("成像系统搭建实训", "需求分析"): [
-        {"title": "检测对象与视野要求", "prompt": "工件尺寸与所需视野范围"},
-        {"title": "成像难点分析", "prompt": "反光、曲面、深色等成像难点"},
-    ],
-    ("成像系统搭建实训", "方案设计"): [
-        {"title": "光源方案", "prompt": "均匀性与稳定性验证"},
-        {"title": "镜头方案", "prompt": "放大倍率与畸变控制"},
-        {"title": "相机方案", "prompt": "接口、带宽与触发方式"},
-    ],
-    ("成像系统搭建实训", "实训报告上传"): [
-        {"title": "选型依据汇总", "prompt": "光源/镜头/相机的选型对比"},
-        {"title": "调试记录与结论", "prompt": "成像调试过程与最终结论"},
-    ],
-}
-
 # --------------------------------------------------------------- 学生闯关进度
 #: 学生做项目的安排：(班级, 项目名, 学生序号区间, 目标状态)
 #: COMPLETED = AI 判通过 + 教师复核通过；OBJECTED = AI 判通过后学生提异议、等教师复核；
@@ -516,6 +287,11 @@ STUDENT_PROJECT_PLAN: tuple[tuple[str, str, tuple[int, int], str], ...] = (
     ("人工智能2402班", "工业缺陷检测实训", (5, 6), "OBJECTED"),
     ("软件技术2404班", "表面缺陷分类进阶", (0, 2), "COMPLETED"),
     ("大数据技术2301班", "表面缺陷分类进阶", (0, 2), "IN_PROGRESS"),
+    # 其余示例项目也铺一点进度，学生端技能树/岗位体系才有"完成项目 → 点亮技能点"的样子
+    ("人工智能2401班", "工业质检模型训练与部署实训", (0, 2), "COMPLETED"),
+    ("大数据技术2301班", "缺陷数据集标注与训练实训", (0, 3), "COMPLETED"),
+    ("大数据技术2301班", "缺陷数据集标注与训练实训", (3, 5), "IN_PROGRESS"),
+    ("软件技术2403班", "产线视觉系统安装调试实训", (0, 2), "COMPLETED"),
 )
 
 #: 演示用的异议留言
@@ -743,12 +519,9 @@ async def run_demo_seed(session: AsyncSession | None = None) -> dict[str, int]:
         trees = SkillTreeRepository(session)
         nodes = SkillNodeRepository(session)
         jobs = JobRepository(session)
-        job_skills = JobSkillRepository(session)
         student_jobs = StudentJobRepository(session)
         templates = StageTemplateRepository(session)
         training_projects = TrainingProjectRepository(session)
-        project_modules = ProjectModuleRepository(session)
-        project_skills = ProjectSkillRepository(session)
         project_files = ProjectFileRepository(session)
         file_assets = FileAssetRepository(session)
         student_records = StudentProjectRepository(session)
@@ -779,20 +552,6 @@ async def run_demo_seed(session: AsyncSession | None = None) -> dict[str, int]:
                 await _ensure_role(user_roles, roles, user_id=teacher.id, role_code="TEACHER")
             )
 
-        # 技能树（基础种子里已有，这里兜底）+ 技能节点
-        tree_ids: dict[str, int] = {}
-        for item in SKILL_TREES:
-            tree = await trees.by_name(item["tree_name"])
-            if tree is None:
-                tree = await trees.create(
-                    {
-                        "tree_name": item["tree_name"],
-                        "description": item["description"],
-                    }
-                )
-                stats["skill_trees"] += 1
-            tree_ids[item["tree_name"]] = tree.id
-
         # 模块库（基础种子里已有 7 个标准模块，这里兜底，项目才有模板可挑）
         for item in STAGE_TEMPLATES:
             if await templates.by_name(item["stage_name"]) is not None:
@@ -808,49 +567,35 @@ async def run_demo_seed(session: AsyncSession | None = None) -> dict[str, int]:
             )
             stats["stage_templates"] += 1
 
-        node_ids: dict[str, int] = {}
-        for tree_name, node_items in SKILL_NODES.items():
-            tree_id = tree_ids.get(tree_name)
-            if tree_id is None:
-                continue
-            for node_name, node_desc in node_items:
-                node = await nodes.by_name(node_name)
-                if node is None:
-                    node = await nodes.create(
-                        {
-                            "tree_id": tree_id,
-                            "node_name": node_name,
-                            "description": node_desc,
-                        }
-                    )
-                    stats["skill_nodes"] += 1
-                node_ids[node_name] = node.id
+        # 岗位 / 技能体系 / 技能点 / 实训项目：底稿与写入逻辑都在 app/db/seed_growth.py
+        for key, value in (await run_growth_seed(session, teacher_ids=teacher_ids)).items():
+            stats[key] = stats.get(key, 0) + value
 
-        # 岗位 + 岗位需要的技能
+        # 上面写入的数据在这里按名称取回 ID：铺班级、发任务、算技能进度都靠它关联
+        tree_ids: dict[str, int] = {}
+        for item in SKILL_TREES:
+            tree = await trees.by_name(item["tree_name"])
+            if tree is not None:
+                tree_ids[item["tree_name"]] = int(tree.id)
+
+        node_ids: dict[str, int] = {}
+        for node_items in SKILL_NODES.values():
+            for node_name, _ in node_items:
+                node = await nodes.by_name(node_name)
+                if node is not None:
+                    node_ids[node_name] = int(node.id)
+
         job_ids: dict[str, int] = {}
         for item in JOBS:
             job = await jobs.by_name(item["job_name"])
-            if job is None:
-                job = await jobs.create(
-                    {
-                        "job_name": item["job_name"],
-                        "direction_tag": item["direction_tag"],
-                        "recommended_level": item["recommended_level"],
-                        "scene": item["scene"],
-                        "description": item["description"],
-                        "heat": item["heat"],
-                    }
-                )
-                stats["jobs"] += 1
-            job_ids[item["job_name"]] = job.id
+            if job is not None:
+                job_ids[item["job_name"]] = int(job.id)
 
-            linked = {node.id for node in await job_skills.list_nodes_of_job(job.id)}
-            for node_name in item["skill_names"]:
-                node_id = node_ids.get(node_name)
-                if node_id is None or node_id in linked:
-                    continue
-                await job_skills.add_skill(job.id, node_id)
-                stats["job_skills"] += 1
+        project_ids: dict[str, int] = {}
+        for item in PROJECTS:
+            project = await training_projects.by_name(item["project_name"])
+            if project is not None:
+                project_ids[item["project_name"]] = int(project.id)
 
         class_student_map: dict[str, list[int]] = {}
         class_ids: dict[str, int] = {}
@@ -945,60 +690,16 @@ async def run_demo_seed(session: AsyncSession | None = None) -> dict[str, int]:
                     )
                     stats["student_jobs"] += 1
 
-        # 项目 + 项目关卡组成（关卡只能从模块库里挑）
-        project_ids: dict[str, int] = {}
+        # 项目附件：报告模板、数据文件（文件落对象存储，元数据进 file_asset）
+        # 项目本身、关卡组成与项目技能已由 run_growth_seed 写入，这里只挂在演示附件上
         for item in PROJECTS:
-            project = await training_projects.by_name(item["project_name"])
-            if project is None:
-                project = await training_projects.create(
-                    {
-                        "project_name": item["project_name"],
-                        "project_level": item["project_level"],
-                        "difficulty": item["difficulty"],
-                        "job_id": job_ids[item["job_name"]],
-                        "description": item["description"],
-                        "status": item["status"],
-                        "creator_id": teacher_ids[item["teacher_no"]],
-                    }
-                )
-                stats["projects"] += 1
-            project_ids[item["project_name"]] = project.id
+            project_id = project_ids.get(item["project_name"])
+            if project_id is None:
+                continue
 
-            for stage_no, (stage_name, weight, required) in enumerate(item["modules"], start=1):
-                template = await templates.by_name(stage_name)
-                if template is None:
-                    continue
-                # 子标题由教师手填（模板不预设），演示数据里直接给每个关卡配一套
-                planned_items = PROJECT_MODULE_ITEMS.get((item["project_name"], stage_name), [])
-                exists = await project_modules.by_template(project.id, template.id)
-                if exists is not None:
-                    # 演示数据以脚本为准：子标题对不上就同步（真人用的项目不受影响，只覆盖演示项目）
-                    if planned_items and exists.items_json != planned_items:
-                        await project_modules.update(exists, {"items_json": planned_items})
-                    continue
-                await project_modules.create(
-                    {
-                        "project_id": project.id,
-                        "template_id": template.id,
-                        "stage_no": stage_no,
-                        "items_json": planned_items,
-                        "required": required,
-                        "weight": Decimal(str(weight)),
-                    }
-                )
-                stats["project_modules"] += 1
-
-            # 项目所需技能：对齐岗位技能并做少量增补
-            for node_name in PROJECT_SKILLS.get(item["project_name"], ()):
-                node_id = node_ids.get(node_name)
-                if node_id is None or await project_skills.link_exists(project.id, node_id):
-                    continue
-                await project_skills.add_skill(project.id, node_id)
-                stats["project_skills"] += 1
-
-            # 项目附件：报告模板、数据文件（文件落对象存储，元数据进 file_asset）
             existing_files = {
-                (link.file_kind, link.title) for link in await project_files.list_of_project(project.id)
+                (link.file_kind, link.title)
+                for link in await project_files.list_of_project(project_id)
             }
             for attachment in PROJECT_FILES.get(item["project_name"], ()):
                 if (attachment["file_kind"], attachment["title"]) in existing_files:
@@ -1007,7 +708,7 @@ async def run_demo_seed(session: AsyncSession | None = None) -> dict[str, int]:
                     attachment["content"].encode("utf-8"),
                     filename=attachment["name"],
                     biz_type=attachment["file_kind"],
-                    scope=storage.project_scope(project.id, project.project_name),
+                    scope=storage.project_scope(project_id, item["project_name"]),
                 )
                 asset = await file_assets.create(
                     {
@@ -1022,12 +723,12 @@ async def run_demo_seed(session: AsyncSession | None = None) -> dict[str, int]:
                 )
                 await project_files.create(
                     {
-                        "project_id": project.id,
+                        "project_id": project_id,
                         "file_asset_id": asset.id,
                         "file_kind": attachment["file_kind"],
                         "title": attachment["title"],
                         "remark": attachment["remark"],
-                        "sort_no": await project_files.next_sort_no(project.id),
+                        "sort_no": await project_files.next_sort_no(project_id),
                     }
                 )
                 stats["project_files"] += 1

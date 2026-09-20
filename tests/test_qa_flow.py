@@ -34,7 +34,7 @@ TEST_LLM_CONFIG = LLMConfig(
 def _stub_llm_config(monkeypatch: pytest.MonkeyPatch, *, api_key: str = "sk-test-key") -> None:
     config = replace(TEST_LLM_CONFIG, api_key=api_key)
 
-    async def _fake(_session) -> LLMConfig:
+    async def _fake(_session, model: str | None = None) -> LLMConfig:  # noqa: ARG001
         return config
 
     monkeypatch.setattr(settings_store, "get_llm_config", _fake)
@@ -64,6 +64,8 @@ def _stub_stream(
                 "user": user_prompt,
                 "history": list(history),
                 "model": config.model,
+                "base_url": config.base_url,
+                "model_key": getattr(config, "key", None),
             }
         )
         if error is not None:
@@ -90,10 +92,17 @@ async def _session(client: httpx.AsyncClient, student_id: int, **extra: Any) -> 
     return response.json()
 
 
-async def _ask(client: httpx.AsyncClient, session_id: int, student_id: int, question: str) -> Any:
+async def _ask(
+    client: httpx.AsyncClient,
+    session_id: int,
+    student_id: int,
+    question: str,
+    *,
+    model: str | None = None,
+) -> Any:
     return await client.post(
         f"/api/qa/sessions/{session_id}/ask",
-        json={"student_id": student_id, "question": question, "stream": False},
+        json={"student_id": student_id, "question": question, "stream": False, "model": model},
     )
 
 
