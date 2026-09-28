@@ -110,6 +110,15 @@ class ProjectModuleDetail(ProjectModuleRead):
     stage_name: str = Field(description="模块名称（取模板）")
     default_weight: Decimal = Field(default=Decimal(0), description="模板默认权重")
     items_json: list[StageItem] = Field(default_factory=list, description="本项目的填写引导子标题")
+    skill_node_ids: list[int] = Field(
+        default_factory=list, description="本关卡关联的技能点 ID（技能点亮按关卡得分判定）"
+    )
+
+
+class ModuleSkillSetIn(SQLModel):
+    """覆盖式设置某个关卡的技能点。"""
+
+    skill_node_ids: list[int] = Field(default_factory=list, description="技能点 ID 列表")
 
 
 class ProjectModuleOrderIn(SQLModel):
@@ -164,6 +173,7 @@ class TrainingProjectDetail(TrainingProjectRead):
 
 
 __all__ = [
+    "ModuleSkillSetIn",
     "ProjectModuleCreate",
     "ProjectModuleAddIn",
     "ProjectModuleDetail",

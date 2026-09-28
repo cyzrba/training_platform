@@ -3,9 +3,9 @@
 from app.models import Base
 
 
-def test_table_count_is_44() -> None:
-    """40 张业务表 + J 域任务下发的 4 张（publish_task / target / job / project）。"""
-    assert len(Base.metadata.tables) == 44
+def test_table_count_is_48() -> None:
+    """44 张原有业务表 + 证书 3 张（规则 / 所需技能 / 申请）+ 关卡技能关联 1 张。"""
+    assert len(Base.metadata.tables) == 48
 
 
 def test_domain_table_names() -> None:
@@ -32,6 +32,7 @@ def test_domain_table_names() -> None:
         "job_skill",
         "growth_rule",
         "project_skill",
+        "project_module_skill",
         # D 实训项目
         "training_project",
         "project_stage_template",
@@ -49,6 +50,9 @@ def test_domain_table_names() -> None:
         "review_ai_job",
         # F 证书
         "student_certificate",
+        "certificate_rule",
+        "certificate_skill",
+        "certificate_application",
         # H 知识库
         "knowledge_doc",
         "knowledge_chunk",
@@ -69,10 +73,10 @@ def test_domain_table_names() -> None:
 
 def test_index_and_foreign_key_count() -> None:
     indexes = {index.name for table in Base.metadata.tables.values() for index in table.indexes}
-    assert len(indexes) == 42
+    assert len(indexes) == 47
 
     foreign_keys = sum(len(table.foreign_keys) for table in Base.metadata.tables.values())
-    assert foreign_keys == 70
+    assert foreign_keys == 79
 
 
 def test_soft_delete_tables() -> None:

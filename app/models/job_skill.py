@@ -27,13 +27,12 @@ class JobBase(SQLModel):
     )
     scene: str | None = Field(default=None, max_length=100, description="适配实训场景")
     description: str | None = Field(default=None, description="说明/描述")
-    heat: int = Field(default=0, description="热度（事件更新）")
     status: str = Field(default="ENABLED", max_length=20, description="ENABLED 启用 / DISABLED 停用")
     created_by: int | None = Field(default=None, foreign_key="sys_user.id", description="创建人 ID")
 
 
 class Job(Base, TimestampMixin, SoftDeleteMixin, JobBase, table=True):
-    """岗位主数据（方向、推荐等级、适配场景、热度、启用状态）。"""
+    """岗位主数据（方向、推荐等级、适配场景、启用状态）。"""
 
     __tablename__ = "job"
     __table_args__ = (

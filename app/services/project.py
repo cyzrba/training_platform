@@ -3,7 +3,11 @@
 from decimal import Decimal
 
 from app.core.exceptions import BusinessRuleError
-from app.crud.project import ProjectModuleRepository, StageTemplateRepository
+from app.crud.project import (
+    ProjectModuleRepository,
+    ProjectModuleSkillRepository,
+    StageTemplateRepository,
+)
 from app.models.project import ProjectModule
 from app.schemas.project import ProjectModuleDetail
 
@@ -14,14 +18,23 @@ REQUIRED_WEIGHT_TOTAL = Decimal("100")
 async def build_module_details(
     modules: list[ProjectModule],
     templates: StageTemplateRepository,
+    skills: ProjectModuleSkillRepository | None = None,
 ) -> list[ProjectModuleDetail]:
-    """把项目模块拼成带模板信息的明细（关卡名称统一读模块库）。"""
+    """把项目模块拼成带模板信息的明细（关卡名称统一读模块库）。
+
+    传入 ``skills`` 仓储时会一并带上该关卡关联的技能点 ID（技能点亮按关卡判定）。
+    """
     template_map = {
         template.id: template
         for template in await templates.list_by_ids(
             [module.template_id for module in modules], include_deleted=True
         )
     }
+    skill_map = (
+        await skills.skill_node_ids_of_modules([module.id for module in modules if module.id])
+        if skills is not None and modules
+        else {}
+    )
     details: list[ProjectModuleDetail] = []
     for module in modules:
         template = template_map.get(module.template_id)
@@ -32,13 +45,18 @@ async def build_module_details(
                 **module.model_dump(),
                 stage_name=template.stage_name,
                 default_weight=template.default_weight,
+                skill_node_ids=skill_map.get(module.id, []),
             )
         )
     return details
 
 
-async def module_detail(module: ProjectModule, templates: StageTemplateRepository) -> ProjectModuleDetail:
-    details = await build_module_details([module], templates)
+async def module_detail(
+    module: ProjectModule,
+    templates: StageTemplateRepository,
+    skills: ProjectModuleSkillRepository | None = None,
+) -> ProjectModuleDetail:
+    details = await build_module_details([module], templates, skills)
     return details[0]
 
 

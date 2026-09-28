@@ -8,6 +8,7 @@ from fastapi import APIRouter, FastAPI
 from app.api.endpoints import (
     accounts,
     attempts,
+    certification,
     enums,
     health,
     job_skill,
@@ -25,6 +26,7 @@ API_ROUTERS: tuple[APIRouter, ...] = (
     health.router,
     enums.router,
     accounts.router,
+    certification.router,
     organization.router,
     job_skill.router,
     projects.router,

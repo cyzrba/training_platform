@@ -169,11 +169,10 @@ async def test_job_recommendations_top3_with_grouped_skills(
         recommended_level="ADVANCED",
         scene="缺陷检测",
         description="负责产线缺陷检测",
-        heat=100,
     )
-    job_mid = await _job(client, "视觉调试工程师", direction_tag="工业视觉", heat=10)
-    job_low = await _job(client, "数据标注专员", direction_tag="数据工程", heat=500)
-    await _job(client, "无技能岗位", direction_tag="其它", heat=9999)
+    job_mid = await _job(client, "视觉调试工程师", direction_tag="工业视觉")
+    job_low = await _job(client, "数据标注专员", direction_tag="数据工程")
+    await _job(client, "无技能岗位", direction_tag="其它")
 
     await client.put(f"/api/jobs/{job_high['id']}/skills", json={"skill_node_ids": [light["id"]]})
     await client.put(
@@ -205,7 +204,6 @@ async def test_job_recommendations_top3_with_grouped_skills(
     assert top["recommended_level"] == "ADVANCED"
     assert top["scene"] == "缺陷检测"
     assert top["description"] == "负责产线缺陷检测"
-    assert top["heat"] == 100
     assert top["match_score"] == 100
     assert (top["skill_total_count"], top["skill_done_count"]) == (1, 1)
     assert (top["project_total_count"], top["project_done_count"]) == (1, 1)
@@ -227,7 +225,7 @@ async def test_job_recommendations_top3_with_grouped_skills(
 
     assert listed[2]["match_score"] == 0  # 边缘检测没有进度记录
 
-    # 没关联技能的岗位不算候选（热度再高也不出现）
+    # 没关联技能的岗位不算候选
     all_items = (await client.get(RECOMMEND.format(student_id=student["id"]), params={"limit": 20})).json()
     assert {item["job_name"] for item in all_items} == {
         "视觉算法工程师",

@@ -536,10 +536,11 @@ async def test_takeover_with_copied_project_loses_progress(client: httpx.AsyncCl
         [{"class_id": class_b["id"], "target_type": "CLASS"}],
     )
 
-    # 两个项目都已发布 → 都能看到；分母变成 2，老项目那份完成只算一半
+    # 两个项目都已发布 → 都能看到；分母变成 2。
+    # 技能点亮"只进不退"：学生已经点亮的技能不会因为老师新发布项目就被撤销。
     assert await _visible_projects(client, student["id"]) == [original["id"], copied["id"]]
     assert await _required_projects(client, student["id"]) == [copied["id"]]
-    assert await _progress(client, student["id"], skill["id"]) == 50.0
+    assert await _progress(client, student["id"], skill["id"]) == 100.0
     rows = await _task_rows(client, teacher_b["id"])
     assert rows["乙的班·乙老师的任务"]["completion_rate"] == 0.0
 

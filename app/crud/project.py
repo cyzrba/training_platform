@@ -7,7 +7,13 @@ from sqlmodel import delete, func, or_, select
 
 from app.core.time import now
 from app.crud.base import BaseRepository
-from app.models.project import ProjectFile, ProjectModule, ProjectStageTemplate, TrainingProject
+from app.models.project import (
+    ProjectFile,
+    ProjectModule,
+    ProjectModuleSkill,
+    ProjectStageTemplate,
+    TrainingProject,
+)
 from app.schemas.base import Page, PageParams
 
 
@@ -152,7 +158,21 @@ class ProjectModuleRepository(BaseRepository[ProjectModule]):
         await self.session.flush()
 
     async def delete_of_project(self, project_id: int) -> None:
-        """删项目时一并清掉它的模块组成。"""
+        """删项目时一并清掉它的模块组成与关卡技能绑定。"""
+        module_ids = [
+            int(module_id)
+            for module_id in (
+                await self.session.exec(
+                    select(ProjectModule.id).where(ProjectModule.project_id == project_id)
+                )
+            ).all()
+        ]
+        if module_ids:
+            await self.session.exec(
+                delete(ProjectModuleSkill).where(
+                    ProjectModuleSkill.project_module_id.in_(module_ids)  # type: ignore[attr-defined]
+                )
+            )
         await self.session.exec(delete(ProjectModule).where(ProjectModule.project_id == project_id))
         await self.session.flush()
 
@@ -182,9 +202,61 @@ class ProjectFileRepository(BaseRepository[ProjectFile]):
         await self.session.flush()
 
 
+class ProjectModuleSkillRepository(BaseRepository[ProjectModuleSkill]):
+    """关卡 ↔ 技能点关联仓储：技能点亮的权威绑定。"""
+
+    model = ProjectModuleSkill
+
+    async def skill_node_ids(self, module_id: int) -> list[int]:
+        stmt = (
+            select(ProjectModuleSkill.skill_node_id)
+            .where(ProjectModuleSkill.project_module_id == module_id)
+            .order_by(ProjectModuleSkill.skill_node_id)
+        )
+        return [int(node_id) for node_id in (await self.session.exec(stmt)).all()]
+
+    async def skill_node_ids_of_modules(self, module_ids: Sequence[int]) -> dict[int, list[int]]:
+        if not module_ids:
+            return {}
+        stmt = select(
+            ProjectModuleSkill.project_module_id, ProjectModuleSkill.skill_node_id
+        ).where(ProjectModuleSkill.project_module_id.in_(list(module_ids)))  # type: ignore[attr-defined]
+        grouped: dict[int, list[int]] = {}
+        for module_id, node_id in (await self.session.exec(stmt)).all():
+            grouped.setdefault(int(module_id), []).append(int(node_id))
+        return grouped
+
+    async def replace_skills(self, module_id: int, skill_node_ids: Sequence[int]) -> int:
+        await self.session.exec(
+            delete(ProjectModuleSkill).where(ProjectModuleSkill.project_module_id == module_id)
+        )
+        for node_id in dict.fromkeys(skill_node_ids):
+            self.session.add(
+                ProjectModuleSkill(project_module_id=module_id, skill_node_id=node_id)
+            )
+        await self.session.flush()
+        return len(list(dict.fromkeys(skill_node_ids)))
+
+    async def delete_of_module(self, module_id: int) -> None:
+        await self.session.exec(
+            delete(ProjectModuleSkill).where(ProjectModuleSkill.project_module_id == module_id)
+        )
+        await self.session.flush()
+
+    async def node_ids_of_project(self, project_id: int) -> list[int]:
+        """该项目所有关卡上的技能点（去重），用于回写项目级 project_skill。"""
+        stmt = (
+            select(ProjectModuleSkill.skill_node_id)
+            .join(ProjectModule, ProjectModule.id == ProjectModuleSkill.project_module_id)  # type: ignore[arg-type]
+            .where(ProjectModule.project_id == project_id)
+        )
+        return list({int(node_id) for node_id in (await self.session.exec(stmt)).all()})
+
+
 __all__ = [
     "ProjectFileRepository",
     "ProjectModuleRepository",
+    "ProjectModuleSkillRepository",
     "StageTemplateRepository",
     "TrainingProjectRepository",
 ]

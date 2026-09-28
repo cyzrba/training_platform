@@ -47,6 +47,7 @@ from app.crud.organization import (
 )
 from app.crud.project import (
     ProjectFileRepository,
+    ProjectModuleRepository,
     StageTemplateRepository,
     TrainingProjectRepository,
 )
@@ -521,6 +522,7 @@ async def run_demo_seed(session: AsyncSession | None = None) -> dict[str, int]:
         jobs = JobRepository(session)
         student_jobs = StudentJobRepository(session)
         templates = StageTemplateRepository(session)
+        project_modules = ProjectModuleRepository(session)
         training_projects = TrainingProjectRepository(session)
         project_files = ProjectFileRepository(session)
         file_assets = FileAssetRepository(session)
@@ -829,10 +831,37 @@ async def run_demo_seed(session: AsyncSession | None = None) -> dict[str, int]:
                 # 结论按配置及格线算（演示分数都高于 60 线，所以都是 PASS）
                 pass_score = await pass_score_of_project(session, project_id)
                 conclusion = judge_conclusion(score, pass_score)
-                dimensions = [
-                    {"name": "内容完整性", "score": str(score - 3), "weight": "40", "reason": "要点齐全"},
-                    {"name": "方案可行性", "score": str(score), "weight": "60", "reason": "方案可落地"},
-                ]
+                # 逐关维度：名称取关卡名、权重取关卡权重（与真实 AI 评审的口径一致），
+                # 技能点亮按"关卡得分率"判定，所以这里必须一个关卡一条。
+                project_module_rows = await project_modules.list_of_project(project_id)
+                template_names = {
+                    int(template.id): template.stage_name
+                    for template in await templates.list_by_ids(
+                        [int(module.template_id) for module in project_module_rows],
+                        include_deleted=True,
+                    )
+                }
+                module_meta = {
+                    int(module.id): (
+                        template_names.get(int(module.template_id), f"关卡{module.stage_no}"),
+                        Decimal(str(module.weight)),
+                    )
+                    for module in project_module_rows
+                }
+                dimensions = []
+                for stage in stage_rows:
+                    stage_name, stage_weight = module_meta.get(
+                        int(stage.project_module_id), ("关卡", Decimal(0))
+                    )
+                    stage_score = (score * stage_weight / Decimal(100)).quantize(Decimal("0.01"))
+                    dimensions.append(
+                        {
+                            "name": stage_name,
+                            "score": str(stage_score),
+                            "weight": str(stage_weight),
+                            "reason": "演示数据：按关卡权重折算",
+                        }
+                    )
                 ai_review = await reviews_repo.create(
                     {
                         "submission_id": submission.id,

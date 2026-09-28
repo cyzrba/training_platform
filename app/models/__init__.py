@@ -22,6 +22,11 @@ from app.models.attempt import (
 )
 from app.models.base import Base, CreatedAtMixin, SoftDeleteMixin, TimestampMixin
 from app.models.certificate import StudentCertificate
+from app.models.certification import (
+    CertificateApplication,
+    CertificateRule,
+    CertificateSkill,
+)
 from app.models.job_skill import (
     GrowthRule,
     Job,
@@ -45,6 +50,7 @@ from app.models.organization import ClassGroup, ClassInfo, ClassStudent, ClassSt
 from app.models.project import (
     ProjectFile,
     ProjectModule,
+    ProjectModuleSkill,
     ProjectStageTemplate,
     TrainingProject,
 )
@@ -63,6 +69,9 @@ __all__ = [
     "AttemptStage",
     "AttemptStageFile",
     "Base",
+    "CertificateApplication",
+    "CertificateRule",
+    "CertificateSkill",
     "ClassGroup",
     "ClassInfo",
     "ClassStudent",
@@ -77,6 +86,7 @@ __all__ = [
     "Notification",
     "OperationLog",
     "ProjectModule",
+    "ProjectModuleSkill",
     "ProjectFile",
     "ProjectSkill",
     "ProjectStageTemplate",

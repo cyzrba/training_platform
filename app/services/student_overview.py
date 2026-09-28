@@ -171,7 +171,7 @@ async def _completed_project_ids(session: AsyncSession, student_id: int) -> set[
 async def recommend_jobs(session: AsyncSession, student_id: int, *, limit: int = 3) -> list[dict]:
     """按学生技能进度推荐岗位，默认取前三名。
 
-    排序：匹配度倒序 → 已达 100% 的技能点数倒序 → 岗位热度倒序 → 岗位 ID 升序（保证结果稳定）。
+    排序：匹配度倒序 → 已达 100% 的技能点数倒序 → 岗位 ID 升序（保证结果稳定）。
     只推荐启用中（ENABLED）、未软删、且**已经关联技能点**的岗位 ——
     没关联技能的岗位算不出匹配度，不参与推荐（此时前端展示"还没有推荐岗位"）。
     """
@@ -243,7 +243,6 @@ async def recommend_jobs(session: AsyncSession, student_id: int, *, limit: int =
                 "recommended_level": job.recommended_level,
                 "scene": job.scene,
                 "description": job.description,
-                "heat": job.heat,
                 "match_score": _percent(progresses),
                 "skill_total_count": len(node_ids),
                 "skill_done_count": sum(1 for value in progresses if value >= MASTERED_PROGRESS),
@@ -257,7 +256,6 @@ async def recommend_jobs(session: AsyncSession, student_id: int, *, limit: int =
         key=lambda item: (
             -item["match_score"],
             -item["skill_done_count"],
-            -item["heat"],
             item["job_id"],
         )
     )
