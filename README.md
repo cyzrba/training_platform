@@ -79,7 +79,8 @@ uv run uvicorn app.main:app --reload     # 接口文档 http://127.0.0.1:8000/do
 
 岗位 / 技能体系 / 技能点 / 实训项目的**数据底稿在 `app/db/seed_growth.py`**
 （取自《岗位能力与技能点归纳》）：4 个技能体系、35 个技能点、10 个岗位、11 个示例项目，
-岗位-技能矩阵（§6 的 ● 与 ○）、项目-技能关联、关卡的填写引导子标题也都在这个文件里。
+岗位-技能矩阵（§6 的 ● 与 ○）、项目-技能关联（会同时平铺到该项目每个关卡）、
+关卡的填写引导子标题也都在这个文件里。
 基础种子 `app/db/seed.py` 与演示数据 `app/db/seed_demo.py` 都调它写库，改数据只改这一处。
 
 注意：**MinIO 是必需组件**（存储层只实现了 S3 协议，没有本地磁盘后端），Milvus 与模型
@@ -257,8 +258,13 @@ curl "http://127.0.0.1:8000/api/students/1/project-progress?scope=TEACHER"
 curl http://127.0.0.1:8000/api/students/1/projects/1
 ```
 
-口径：技能点进度取 `student_skill.progress`（"完成项目数 ÷ 关联项目总数"×100，其中**分母 = 该
-技能点关联的全部已发布（PUBLISHED）项目**，与任务无关；手工调整记 MANUAL）；
+口径：技能点进度取 `student_skill.progress` = **达标关卡数 ÷ 关联关卡数 × 100**。技能点绑在
+项目关卡上（`project_module_skill`），**分母 = 该技能点关联的全部关卡**（只算已发布 PUBLISHED
+项目下的关卡，与任务无关）；某个关卡"达标" = 该关卡得分率（关卡得分 ÷ 关卡权重 × 100）≥
+所在项目层级的及格线（`growth_rule.pass_score`，默认 60）。取分规则：同一次提交**教师定稿
+优先于 AI**，同一关卡取历史最高；评审只给了总分时按总分判定该项目每个关卡。
+**点亮只进不退**：`mastered_at` 一旦写入就保持点亮，新增项目 / 关卡不会撤销，只有所有达标
+关卡都被改判成不通过时才回退；手工调整记 MANUAL；
 岗位匹配度、技能树进度、整体进度都是**相关技能点进度的均值**；岗位的关联项目 =
 `training_project.job_id` 指向该岗位的已发布项目；
 关卡进度 =
@@ -287,6 +293,37 @@ curl http://127.0.0.1:8000/api/students/1/projects/1
 
 项目详情里每关的 `answer_text` 就是**本轮已保存的作答**（草稿也算），`current_attempt_id` +
 每关的 `attempt_stage_id` 用来调下面的保存接口；重新进来时直接把这批内容填回作答框即可接着写。
+
+### 证书规则与发证（AI 面试 + 人工审核）
+
+一个职业固定一张证书（1:1），证书挂一组"所需技能点"；所需技能点全部点亮后证书才点亮，
+学生才能申请 → AI 面试（本期占位）→ 教师人工审核 → 通过后写入证书台账。有效期永久，
+驳回后可重新申请，技能进度不重算。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET / POST | `/api/cert-rules` | 证书规则列表 / 新建（body 带 `skill_node_ids`） |
+| GET / PATCH / DELETE | `/api/cert-rules/{rule_id}` | 详情（带所需技能点）/ 更新（可覆盖所需技能点）/ 删除（已有申请记录时拒绝） |
+| GET | `/api/students/{student_id}/certifications` | 学生证书概览：已选职业对应的证书 + 每个所需技能点的进度与是否点亮 + 最近一次申请 |
+| POST | `/api/students/{student_id}/cert-applications` | 提交申请（证书未点亮时拒绝） |
+| POST | `/api/students/{student_id}/cert-applications/{id}/interview` | AI 面试（本期占位：直接通过并转人工审核） |
+| GET | `/api/students/{student_id}/certificates` | 学生已获得的证书 |
+| GET | `/api/cert-applications` | 教师端申请列表（可按 `status` / `keyword` 筛） |
+| POST | `/api/cert-applications/{id}/review` | 人工审核：`APPROVED` 通过并发证 / `REJECTED` 驳回 |
+| GET | `/api/certificates` | 证书台账（已发放证书分页列表，带学生与岗位） |
+
+申请状态流转：`PENDING_INTERVIEW`（待 AI 面试）→ `UNDER_REVIEW`（待人工审核）→
+`APPROVED` / `REJECTED`。种子数据会为每个岗位生成一张证书，所需技能点默认取该岗位关联的技能点。
+
+### 关卡所需技能（技能点亮的权威绑定）
+
+技能点绑在**项目关卡**上（`project_module_skill`），项目级的 `project_skill` 由关卡绑定自动
+汇总，不再手工维护：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET / PUT | `/api/projects/{project_id}/modules/{module_id}/skills` | 查询 / 覆盖式设置某个关卡的技能点 |
+| GET | `/api/skill-node-bindings` | 技能点绑定情况：`?missing=job`（缺岗位）/ `project`（缺项目）/ `both`（两端都缺），不传 = 缺任意一端 |
 
 ### 学生保存作答（草稿保存）
 
@@ -338,6 +375,8 @@ models/            本地模型权重（gitignore）
   `project_file` 存"哪个项目用了它、用途是什么"。项目附件的归属信息只存一处。
 - **改表结构要三处同步**：`app/models/` → `alembic` 迁移 → `docs/database_schema_draft.sql`，
   改完必须 `uv run python scripts/check_schema_parity.py` 通过（有测试守着）。
+- **技能点的权威绑定在关卡上**：技能点亮看 `project_module_skill`（关卡↔技能），
+  `project_skill`（项目↔技能）只是它的汇总派生；改技能归属请改关卡绑定，别直接写项目级。
 - **枚举 code 只在 `app/models/enums.py` 定义**，落库是 varchar，前端文案走 `GET /api/enums`。
 - **配置分两处**：引导性配置（数据库地址、对象存储接入、切片长度）在 `.env`；
   运行时可改的模型与检索参数在 `system_config` 表，改完即生效（读缓存 60 秒）。
@@ -357,11 +396,14 @@ models/            本地模型权重（gitignore）
   单次约几秒；并发上来后应改成消费 `review_ai_job` 的后台任务。
 - **`review_record` 没有记评分标准版本**：目前把用到的 `criteria_doc_ids` 存在 `raw_json` 里；
   评分标准改版后要能解释历史分数，建议后续加一列 `criteria_doc_id`。
-- 证书、通知、操作日志等域的表与接口骨架已就位，业务规则待细化。
+- 证书链路已实现（规则 / 所需技能点 / 申请 / 面试占位 / 审核 / 台账），**电子证书 PDF 尚未生成**；
+  通知、操作日志等域的表与接口骨架已就位，业务规则待细化。
 
 ## 文档
 
 - [RAG 系统实施方案](docs/RAG系统实施方案.md)：向量库选型、切片策略、检索链路、分期计划
+- [方案：技能点模块化绑定](docs/方案-技能点模块化绑定.md)：技能点绑到项目关卡、按关卡得分点亮、未绑定清单，含已实施口径
+- [需求定稿：技能与证书](docs/需求定稿-技能与证书.md)：职业 → 证书 → 技能点 → 项目 的链路与最终口径
 - [平台接口文档（全量 177 个接口）](docs/教师端接口文档.md)：系统与枚举字典、账户权限、教学组织（班级/名单/分组）、岗位与技能、实训项目、任务下发、闯关评审、知识库、AI 问答、教师看板
 - [数据库表字段清单](docs/数据库表字段清单.md) ｜ [DDL 草稿](docs/database_schema_draft.sql)
 - [后端脚手架实施方案](docs/后端脚手架实施方案.md)
