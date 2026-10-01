@@ -252,9 +252,9 @@ async def test_repeat_fail_keeps_skill(client: httpx.AsyncClient, monkeypatch: p
 async def test_regrade_rolls_back_only_when_no_pass_left(
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """只有"唯一那条通过评审被改判"才回滚技能——重复挑战失败不算。
+    """技能点亮"只进不退"：重复挑战失败不回退；改判单个项目也不回退。
 
-    两者性质不同：前者是"这个判定本来就不成立"，后者是"新一次没做好"。
+    只有"所有达标关卡都被改判成不通过"（一个达标关卡都不剩）时，才真正回退。
     """
     llm = _FakeLlm()
     monkeypatch.setattr(ai_review, "call_llm", llm)
@@ -283,14 +283,20 @@ async def test_regrade_rolls_back_only_when_no_pass_left(
     assert _progress_of(await _skill_progress(client, student["id"], skill["id"])) == 100.0
     assert (await _record(client, student["id"], alpha["id"]))["status"] == "COMPLETED"
 
-    # 教师把项目甲那条唯一的通过评审改判为不通过 → 才回滚到 50%
+    # 教师把项目甲那条通过评审改判为不通过 → 项目乙仍然达标，
+    # 技能点亮"只进不退"，保持 100%（改判单个项目不会撤销已点亮的技能）
     await client.patch(f"/api/reviews/{reviews[alpha['id']]['id']}", json={"total_score": FAIL_SCORE})
-    dropped = await _skill_progress(client, student["id"], skill["id"])
-    assert _progress_of(dropped) == 50.0
-    assert dropped["mastered_at"] is None, "不再是 100% 就要清掉精通时间"
-    assert dropped["activated_at"] is not None, "仍有完成项目，保持已激活"
+    still_lit = await _skill_progress(client, student["id"], skill["id"])
+    assert _progress_of(still_lit) == 100.0
+    assert still_lit["mastered_at"] is not None
     assert (await _record(client, student["id"], alpha["id"]))["status"] == "IN_PROGRESS"
     assert (await _record(client, student["id"], beta["id"]))["status"] == "COMPLETED"
+
+    # 项目乙也被改判成不通过 → 所有达标关卡都没了，这时才真正回退
+    await client.patch(f"/api/reviews/{reviews[beta['id']]['id']}", json={"total_score": FAIL_SCORE})
+    dropped = await _skill_progress(client, student["id"], skill["id"])
+    assert _progress_of(dropped) == 0.0
+    assert dropped["mastered_at"] is None, "没有达标关卡了才清掉精通时间"
 
 
 @pytest.mark.asyncio

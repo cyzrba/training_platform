@@ -48,7 +48,7 @@ async def _create_student(client: httpx.AsyncClient, user_no: str = "2026001") -
 @pytest.mark.asyncio
 async def test_job_crud_and_filters(client: httpx.AsyncClient) -> None:
     job = await _create_job(client)
-    assert job["status"] == "ENABLED" and job["heat"] == 0
+    assert job["status"] == "ENABLED"
 
     duplicate = await client.post(JOBS, json={"job_name": "工业视觉工程师"})
     assert duplicate.status_code == 200
@@ -61,9 +61,9 @@ async def test_job_crud_and_filters(client: httpx.AsyncClient) -> None:
     assert (await client.get(JOBS, params={"recommended_level": "ADVANCED"})).json()["total"] == 0
     assert (await client.get(JOBS, params={"direction_tag": "机器视觉"})).json()["total"] == 1
 
-    patched = await client.patch(f"{JOBS}/{job['id']}", json={"remark": "热门岗位", "heat": 3})
+    patched = await client.patch(f"{JOBS}/{job['id']}", json={"description": "热门岗位"})
     assert patched.status_code == 200
-    assert patched.json()["heat"] == 3
+    assert patched.json()["description"] == "热门岗位"
 
     assert (await client.delete(f"{JOBS}/{job['id']}")).status_code == 200
     assert (await client.get(f"{JOBS}/{job['id']}")).status_code == 200

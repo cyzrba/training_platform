@@ -11,7 +11,7 @@ from sqlmodel import (
     UniqueConstraint,
 )
 
-from app.models.base import Base, SoftDeleteMixin, TimestampMixin
+from app.models.base import Base, CreatedAtMixin, SoftDeleteMixin, TimestampMixin
 
 # -------------------------------------------------------------------- 实训项目
 
@@ -110,6 +110,26 @@ class ProjectModule(Base, TimestampMixin, ProjectModuleBase, table=True):
     id: int | None = Field(default=None, primary_key=True)
 
 
+class ProjectModuleSkillBase(SQLModel):
+    project_module_id: int = Field(foreign_key="project_module.id", description="项目关卡 ID")
+    skill_node_id: int = Field(foreign_key="skill_node.id", description="技能点 ID")
+
+
+class ProjectModuleSkill(Base, CreatedAtMixin, ProjectModuleSkillBase, table=True):
+    """关卡 ↔ 技能点：技能点亮的权威绑定（按关卡得分判定是否达标）。
+
+    ``project_skill``（项目级）由本表汇总派生，不再手工维护。
+    """
+
+    __tablename__ = "project_module_skill"
+    __table_args__ = (
+        UniqueConstraint("project_module_id", "skill_node_id", name="uk_project_module_skill"),
+        Index("idx_project_module_skill_node", "skill_node_id"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+
+
 class ProjectFileBase(SQLModel):
     project_id: int = Field(foreign_key="training_project.id", description="项目 ID")
     file_asset_id: int = Field(foreign_key="file_asset.id", description="文件 ID（file_asset.id）")
@@ -140,6 +160,8 @@ __all__ = [
     "ProjectFileBase",
     "ProjectModule",
     "ProjectModuleBase",
+    "ProjectModuleSkill",
+    "ProjectModuleSkillBase",
     "ProjectStageTemplate",
     "ProjectStageTemplateBase",
     "TrainingProject",

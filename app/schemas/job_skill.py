@@ -31,7 +31,6 @@ class JobUpdate(SQLModel):
     recommended_level: str | None = Field(default=None, max_length=20)
     scene: str | None = Field(default=None, max_length=100)
     description: str | None = None
-    heat: int | None = Field(default=None, ge=0)
     status: str | None = Field(default=None, max_length=20)
     created_by: int | None = None
 
@@ -141,6 +140,18 @@ class SkillNodeDetail(SkillNodeRead):
 
     tree_name: str | None = Field(default=None, description="所属技能树名称")
     prerequisite_ids: list[int] = Field(default_factory=list, description="前置技能节点 ID 列表")
+
+
+class SkillNodeBindingStatus(SQLModel):
+    """技能点的绑定情况：是否已被岗位 / 项目（关卡）引用。"""
+
+    skill_node_id: int = Field(description="技能点 ID")
+    node_name: str = Field(description="技能点名称")
+    tree_id: int = Field(description="所属技能树 ID")
+    tree_name: str | None = Field(default=None, description="所属技能树名称")
+    description: str | None = Field(default=None, description="技能点说明")
+    has_job: bool = Field(default=False, description="是否已绑定岗位")
+    has_project: bool = Field(default=False, description="是否已绑定项目（关卡）")
 
 
 # ---------------------------------------------------------------- 技能前置依赖
@@ -274,7 +285,6 @@ class JobRecommendation(SQLModel):
     )
     scene: str | None = Field(default=None, description="适配实训场景")
     description: str | None = Field(default=None, description="岗位描述")
-    heat: int = Field(default=0, description="岗位热度")
     match_score: float = Field(default=0, description="匹配度 0~100 = 岗位关联技能点进度均值，排序依据")
     skill_total_count: int = Field(default=0, description="岗位关联技能点总数")
     skill_done_count: int = Field(default=0, description="其中进度已达 100% 的个数")
@@ -374,6 +384,7 @@ __all__ = [
     "SkillNodeDependencyRead",
     "SkillNodeDependencySetIn",
     "SkillNodeDetail",
+    "SkillNodeBindingStatus",
     "SkillNodeProgressItem",
     "SkillNodeRead",
     "SkillNodeUpdate",

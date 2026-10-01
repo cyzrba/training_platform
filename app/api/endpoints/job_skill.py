@@ -23,9 +23,12 @@ from app.crud.job_skill import (
 from app.models.job_skill import (
     GrowthRule,
     Job,
+    JobSkill,
+    ProjectSkill,
     SkillNode,
     SkillTree,
 )
+from app.models.project import ProjectModuleSkill
 from app.schemas.base import ApiResponse, MessageOut, Page
 from app.schemas.job_skill import (
     GrowthRuleCreate,
@@ -37,6 +40,7 @@ from app.schemas.job_skill import (
     JobRecommendation,
     JobSkillSetIn,
     JobUpdate,
+    SkillNodeBindingStatus,
     SkillNodeCreateIn,
     SkillNodeDependencySetIn,
     SkillNodeDetail,
@@ -379,6 +383,69 @@ async def create_skill_node(
     return await nodes.create(data)
 
 
+@router.get(
+    "/skill-node-bindings",
+    response_model=ApiResponse[list[SkillNodeBindingStatus]],
+    summary="技能点绑定情况（缺岗位 / 缺项目 / 两端都缺）",
+)
+async def list_skill_node_bindings(
+    db: DbSession,
+    missing: Annotated[
+        str | None,
+        Query(description="job 缺岗位 / project 缺项目 / both 两端都缺；不传 = 缺任意一端"),
+    ] = None,
+) -> list[dict]:
+    """教师端用来查"哪些技能点还没配上岗位或项目"，帮助尽快安排绑定。"""
+    from sqlmodel import select
+
+    node_rows = list(
+        (
+            await db.exec(
+                select(SkillNode)
+                .where(SkillNode.deleted_at.is_(None))  # type: ignore[attr-defined]
+                .order_by(SkillNode.tree_id, SkillNode.id)
+            )
+        ).all()
+    )
+    tree_rows = list(
+        (
+            await db.exec(
+                select(SkillTree).where(SkillTree.deleted_at.is_(None))  # type: ignore[attr-defined]
+            )
+        ).all()
+    )
+    tree_name = {int(tree.id): tree.tree_name for tree in tree_rows}
+    job_bound = {int(x) for x in (await db.exec(select(JobSkill.skill_node_id))).all()}
+    project_bound = {int(x) for x in (await db.exec(select(ProjectModuleSkill.skill_node_id))).all()}
+    project_bound |= {int(x) for x in (await db.exec(select(ProjectSkill.skill_node_id))).all()}
+
+    result: list[dict] = []
+    for node in node_rows:
+        node_id = int(node.id)
+        has_job = node_id in job_bound
+        has_project = node_id in project_bound
+        if missing == "job" and has_job:
+            continue
+        if missing == "project" and has_project:
+            continue
+        if missing == "both" and (has_job or has_project):
+            continue
+        if missing is None and has_job and has_project:
+            continue
+        result.append(
+            {
+                "skill_node_id": node_id,
+                "node_name": node.node_name,
+                "tree_id": node.tree_id,
+                "tree_name": tree_name.get(node.tree_id),
+                "description": node.description,
+                "has_job": has_job,
+                "has_project": has_project,
+            }
+        )
+    return result
+
+
 @router.get("/skill-nodes/{node_id}", response_model=ApiResponse[SkillNodeDetail], summary="技能节点详情")
 async def get_skill_node(
     node_id: int, nodes: SkillNodeRepo, trees: SkillTreeRepo, dependencies: DependencyRepo
@@ -669,8 +736,8 @@ async def list_job_recommendations(
 ) -> list[dict]:
     """按学生技能进度推荐岗位，默认返回前三名。
 
-    匹配度 = 岗位关联技能点进度的均值；排序：匹配度 → 已达 100% 的技能点数 → 热度 → 岗位 ID。
-    每条结果带岗位画像（方向 / 推荐等级 / 适配场景 / 描述 / 热度）、技能点与项目完成情况，
+    匹配度 = 岗位关联技能点进度的均值；排序：匹配度 → 已达 100% 的技能点数 → 岗位 ID。
+    每条结果带岗位画像（方向 / 推荐等级 / 适配场景 / 描述）、技能点与项目完成情况，
     以及按技能树体系（四大体系）分组的技能点进度明细。
     """
     await _student_or_404(students, student_id)

@@ -18,6 +18,7 @@ from app.crud.knowledge import KnowledgeDocRepository
 from app.crud.project import (
     ProjectFileRepository,
     ProjectModuleRepository,
+    ProjectModuleSkillRepository,
     StageTemplateRepository,
     TrainingProjectRepository,
 )
@@ -33,6 +34,7 @@ from app.models.project import (
 from app.schemas.base import ApiResponse, MessageOut, Page
 from app.schemas.job_skill import JobSkillSetIn, SkillNodeRead
 from app.schemas.project import (
+    ModuleSkillSetIn,
     ProjectFileAddIn,
     ProjectFileRead,
     ProjectFileUpdate,
@@ -88,6 +90,10 @@ def project_skill_repo(db: DbSession) -> ProjectSkillRepository:
     return ProjectSkillRepository(db)
 
 
+def module_skill_repo(db: DbSession) -> ProjectModuleSkillRepository:
+    return ProjectModuleSkillRepository(db)
+
+
 def skill_node_repo(db: DbSession) -> SkillNodeRepository:
     return SkillNodeRepository(db)
 
@@ -96,6 +102,7 @@ StageTemplateRepo = Annotated[StageTemplateRepository, Depends(stage_template_re
 ProjectModuleRepo = Annotated[ProjectModuleRepository, Depends(project_module_repo)]
 TrainingProjectRepo = Annotated[TrainingProjectRepository, Depends(training_project_repo)]
 ProjectSkillRepo = Annotated[ProjectSkillRepository, Depends(project_skill_repo)]
+ModuleSkillRepo = Annotated[ProjectModuleSkillRepository, Depends(module_skill_repo)]
 SkillNodeRepo = Annotated[SkillNodeRepository, Depends(skill_node_repo)]
 ProjectFileRepo = Annotated[ProjectFileRepository, Depends(project_file_repo)]
 FileAssetRepo = Annotated[FileAssetRepository, Depends(file_asset_repo)]
@@ -133,12 +140,13 @@ async def _project_detail(
     templates: StageTemplateRepository,
     files: ProjectFileRepository,
     assets: FileAssetRepository,
+    skills: ProjectModuleSkillRepository | None = None,
 ) -> dict:
     """项目详情：带模块组成（关卡名取模块库）、权重合计与附件清单。"""
     items = await modules.list_of_project(project.id)
     return {
         **project.model_dump(),
-        "modules": await build_module_details(items, templates),
+        "modules": await build_module_details(items, templates, skills),
         "weight_total": await weight_total(items),
         "files": await _project_files(project.id, files, assets),
     }
@@ -357,9 +365,10 @@ async def get_project(
     templates: StageTemplateRepo,
     files: ProjectFileRepo,
     assets: FileAssetRepo,
+    module_skills: ModuleSkillRepo,
 ) -> dict:
     project = await _project_or_404(projects, project_id)
-    return await _project_detail(project, modules, templates, files, assets)
+    return await _project_detail(project, modules, templates, files, assets, module_skills)
 
 
 @router.patch(
@@ -618,9 +627,12 @@ async def list_project_modules(
     projects: TrainingProjectRepo,
     modules: ProjectModuleRepo,
     templates: StageTemplateRepo,
+    module_skills: ModuleSkillRepo,
 ) -> list[ProjectModuleDetail]:
     await _project_or_404(projects, project_id)
-    return await build_module_details(await modules.list_of_project(project_id), templates)
+    return await build_module_details(
+        await modules.list_of_project(project_id), templates, module_skills
+    )
 
 
 @router.post(
@@ -635,6 +647,7 @@ async def add_project_module(
     projects: TrainingProjectRepo,
     modules: ProjectModuleRepo,
     templates: StageTemplateRepo,
+    module_skills: ModuleSkillRepo,
 ) -> ProjectModuleDetail:
     await _project_or_404(projects, project_id)
     template = await _template_or_404(templates, payload.template_id)
@@ -664,7 +677,7 @@ async def add_project_module(
         ),
     }
     module = await modules.create(data)
-    return await module_detail(module, templates)
+    return await module_detail(module, templates, module_skills)
 
 
 @router.patch(
@@ -679,6 +692,7 @@ async def update_project_module(
     projects: TrainingProjectRepo,
     modules: ProjectModuleRepo,
     templates: StageTemplateRepo,
+    module_skills: ModuleSkillRepo,
 ) -> ProjectModuleDetail:
     await _project_or_404(projects, project_id)
     module = await _project_module_or_404(modules, project_id, module_id)
@@ -689,7 +703,7 @@ async def update_project_module(
         if occupied is not None and occupied.id != module.id:
             raise ConflictError(f"项目里已经存在第 {new_stage_no} 个关卡位置")
     updated = await modules.update(module, data)
-    return await module_detail(updated, templates)
+    return await module_detail(updated, templates, module_skills)
 
 
 @router.put(
@@ -703,13 +717,16 @@ async def reorder_project_modules(
     projects: TrainingProjectRepo,
     modules: ProjectModuleRepo,
     templates: StageTemplateRepo,
+    module_skills: ModuleSkillRepo,
 ) -> list[ProjectModuleDetail]:
     await _project_or_404(projects, project_id)
     current = await modules.list_of_project(project_id)
     if sorted(payload.module_ids) != sorted(item.id for item in current):
         raise BusinessRuleError("排序列表必须刚好包含该项目下的全部关卡，不多不少")
     await modules.reorder(project_id, payload.module_ids)
-    return await build_module_details(await modules.list_of_project(project_id), templates)
+    return await build_module_details(
+        await modules.list_of_project(project_id), templates, module_skills
+    )
 
 
 @router.delete(
@@ -720,23 +737,112 @@ async def reorder_project_modules(
 async def remove_project_module(
     project_id: int,
     module_id: int,
+    db: DbSession,
     projects: TrainingProjectRepo,
     modules: ProjectModuleRepo,
+    module_skills: ModuleSkillRepo,
+    project_skills: ProjectSkillRepo,
 ) -> MessageOut:
-    await _project_or_404(projects, project_id)
+    project = await _project_or_404(projects, project_id)
     module = await _project_module_or_404(modules, project_id, module_id)
+    await module_skills.delete_of_module(module_id)
     await modules.remove(module)
     await modules.renumber(project_id)
+    await _sync_project_skill_union(project_id, modules, module_skills, project_skills)
+    if project.status == "PUBLISHED":
+        await skill_service.sync_skills_after_projects_changed(db, [project_id])
     return MessageOut(message="关卡已从项目移除")
 
 
 # ---------------------------------------------------------- 项目所需技能
 
 
+async def _sync_project_skill_union(
+    project_id: int,
+    modules: ProjectModuleRepository,
+    module_skills: ProjectModuleSkillRepository,
+    project_skills: ProjectSkillRepository,
+) -> None:
+    """项目级技能是派生的：始终等于"该项目所有关卡技能的并集"。"""
+    if not await modules.list_of_project(project_id):
+        # 没有关卡的项目（还没配关卡）保留项目级手工设置，避免把技能清空
+        return
+    await project_skills.replace_skills(project_id, await module_skills.node_ids_of_project(project_id))
+
+
+async def _apply_project_skill_set(
+    project_id: int,
+    node_ids: list[int],
+    modules: ProjectModuleRepository,
+    module_skills: ProjectModuleSkillRepository,
+    project_skills: ProjectSkillRepository,
+) -> None:
+    """把一份技能列表批量应用到项目下的每个关卡（项目级接口的兼容实现）。"""
+    module_rows = await modules.list_of_project(project_id)
+    if not module_rows:
+        # 没有关卡：退回项目级直接写入（项目级技能仍按项目完成口径生效）
+        await project_skills.replace_skills(project_id, node_ids)
+        return
+    for module in module_rows:
+        await module_skills.replace_skills(module.id, node_ids)
+    await _sync_project_skill_union(project_id, modules, module_skills, project_skills)
+
+
+@router.get(
+    "/projects/{project_id}/modules/{module_id}/skills",
+    response_model=ApiResponse[list[SkillNodeRead]],
+    summary="查询关卡关联的技能点",
+)
+async def list_module_skills(
+    project_id: int,
+    module_id: int,
+    projects: TrainingProjectRepo,
+    modules: ProjectModuleRepo,
+    module_skills: ModuleSkillRepo,
+    nodes: SkillNodeRepo,
+) -> list[SkillNode]:
+    await _project_or_404(projects, project_id)
+    await _project_module_or_404(modules, project_id, module_id)
+    result: list[SkillNode] = []
+    for node_id in await module_skills.skill_node_ids(module_id):
+        node = await nodes.get(node_id)
+        if node is not None:
+            result.append(node)
+    return result
+
+
+@router.put(
+    "/projects/{project_id}/modules/{module_id}/skills",
+    response_model=ApiResponse[list[SkillNodeRead]],
+    summary="覆盖式设置关卡的技能点（技能点亮按该关卡得分判定）",
+)
+async def set_module_skills(
+    project_id: int,
+    module_id: int,
+    payload: ModuleSkillSetIn,
+    db: DbSession,
+    projects: TrainingProjectRepo,
+    modules: ProjectModuleRepo,
+    module_skills: ModuleSkillRepo,
+    project_skills: ProjectSkillRepo,
+    nodes: SkillNodeRepo,
+) -> list[SkillNode]:
+    project = await _project_or_404(projects, project_id)
+    await _project_module_or_404(modules, project_id, module_id)
+    for node_id in dict.fromkeys(payload.skill_node_ids):
+        if await nodes.get(node_id) is None:
+            raise BusinessRuleError(f"技能节点 {node_id} 不存在")
+    await module_skills.replace_skills(module_id, payload.skill_node_ids)
+    await _sync_project_skill_union(project_id, modules, module_skills, project_skills)
+    if project.status == "PUBLISHED":
+        await skill_service.sync_skills_after_projects_changed(db, [project_id])
+    return await list_module_skills(project_id, module_id, projects, modules, module_skills, nodes)
+
+
 @router.get(
     "/projects/{project_id}/skills",
     response_model=ApiResponse[list[SkillNodeRead]],
-    summary="项目所需技能（完成项目即推进这些技能）",
+    summary="项目所需技能（该项目所有关卡技能的并集，自动汇总）",
 )
 async def list_project_skills(
     project_id: int,
@@ -758,13 +864,18 @@ async def set_project_skills(
     db: DbSession,
     projects: TrainingProjectRepo,
     nodes: SkillNodeRepo,
+    modules: ProjectModuleRepo,
+    module_skills: ModuleSkillRepo,
     project_skills: ProjectSkillRepo,
 ) -> list[SkillNode]:
     project = await _project_or_404(projects, project_id)
     for node_id in dict.fromkeys(payload.skill_node_ids):
         if await nodes.get(node_id) is None:
             raise BusinessRuleError(f"技能节点 {node_id} 不存在")
-    await project_skills.replace_skills(project_id, payload.skill_node_ids)
+    # 项目级写入按"批量应用到每个关卡"处理，保证与关卡绑定一致
+    await _apply_project_skill_set(
+        project_id, list(dict.fromkeys(payload.skill_node_ids)), modules, module_skills, project_skills
+    )
     if project.status == "PUBLISHED":
         await skill_service.sync_skills_after_projects_changed(db, [project_id])
     return await project_skills.list_nodes_of_project(project_id)
@@ -782,6 +893,8 @@ async def add_project_skill(
     db: DbSession,
     projects: TrainingProjectRepo,
     nodes: SkillNodeRepo,
+    modules: ProjectModuleRepo,
+    module_skills: ModuleSkillRepo,
     project_skills: ProjectSkillRepo,
 ) -> MessageOut:
     project = await _project_or_404(projects, project_id)
@@ -790,7 +903,10 @@ async def add_project_skill(
         raise NotFoundError(f"技能节点 {skill_node_id} 不存在")
     if await project_skills.link_exists(project_id, skill_node_id):
         raise ConflictError(f"项目已关联技能「{node.node_name}」")
-    await project_skills.add_skill(project_id, skill_node_id)
+    current = [int(item.id) for item in await project_skills.list_nodes_of_project(project_id)]
+    await _apply_project_skill_set(
+        project_id, [*current, skill_node_id], modules, module_skills, project_skills
+    )
     if project.status == "PUBLISHED":
         await skill_service.sync_skills_after_projects_changed(db, [project_id])
     return MessageOut(message="技能已关联")
@@ -806,10 +922,14 @@ async def remove_project_skill(
     skill_node_id: int,
     db: DbSession,
     projects: TrainingProjectRepo,
+    modules: ProjectModuleRepo,
+    module_skills: ModuleSkillRepo,
     project_skills: ProjectSkillRepo,
 ) -> MessageOut:
     project = await _project_or_404(projects, project_id)
-    await project_skills.remove_skill(project_id, skill_node_id)
+    current = [int(item.id) for item in await project_skills.list_nodes_of_project(project_id)]
+    remaining = [nid for nid in current if nid != skill_node_id]
+    await _apply_project_skill_set(project_id, remaining, modules, module_skills, project_skills)
     if project.status == "PUBLISHED":
         await skill_service.sync_skills_after_projects_changed(db, [project_id])
     return MessageOut(message="技能已解除")

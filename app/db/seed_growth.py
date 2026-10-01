@@ -17,9 +17,9 @@
 落地方式：``run_growth_seed`` 幂等写入（按名称查重），由基础种子 ``app.db.seed`` 与
 演示数据 ``app.db.seed_demo`` 共用；一键重建整库见 ``app.db.build_db``。
 
-改这里的名字前请注意：技能点进度 = 该项目关联的已发布项目的完成度均值
-（app/services/skill.py），岗位匹配度 = 岗位技能点进度的均值，所以改关联关系会直接
-改变学生端看到的进度，不只是换文案。
+改这里的名字前请注意：技能点进度 = 该技能关联关卡里"达标关卡数 ÷ 关联关卡数"
+（app/services/skill.py，达标 = 关卡得分率 ≥ 该层级及格线），岗位匹配度 = 岗位技能点
+进度的均值，所以改关联关系会直接改变学生端看到的进度，不只是换文案。
 """
 
 from decimal import Decimal
@@ -38,6 +38,7 @@ from app.crud.job_skill import (
 )
 from app.crud.project import (
     ProjectModuleRepository,
+    ProjectModuleSkillRepository,
     StageTemplateRepository,
     TrainingProjectRepository,
 )
@@ -115,7 +116,6 @@ JOBS: tuple[dict[str, Any], ...] = (
             "面向工业检测场景，负责光源、镜头、相机的选型与成像系统搭建，通过打光方案设计与"
             "成像调试，把缺陷在图像上打出来，为后续算法提供稳定可用的图像输入。"
         ),
-        "heat": 96,
         "skill_names": (
             "光源选型",
             "镜头选型",
@@ -139,7 +139,6 @@ JOBS: tuple[dict[str, Any], ...] = (
             "面向产线缺陷检测场景，负责成像方案与视觉算法的落地：从看懂检测需求，到搭建成像"
             "系统，再到用传统图像算法完成缺陷的检出与判定，并输出可交付的检测方案。"
         ),
-        "heat": 168,
         "skill_names": (
             "光源选型",
             "相机选型",
@@ -171,7 +170,6 @@ JOBS: tuple[dict[str, Any], ...] = (
             "取舍，处理低对比度、复杂背景、小样本等问题，并通过参数优化与效果验证把误检率、"
             "漏检率压到产线可接受的范围。"
         ),
-        "heat": 142,
         "skill_names": (
             "光源选型",
             "成像调试",
@@ -209,7 +207,6 @@ JOBS: tuple[dict[str, Any], ...] = (
             "调优与轻量化部署。需要能把检测任务翻译成训练任务，并从 loss 曲线、混淆矩阵、"
             "误检样本里找到问题。"
         ),
-        "heat": 155,
         "skill_names": (
             "图像基础",
             "图像滤波",
@@ -243,7 +240,6 @@ JOBS: tuple[dict[str, Any], ...] = (
             "成可调用的推理服务，打通与相机、工控机、PLC、分选机构的信号链路，完成整线联调"
             "与稳定性验证，直至客户验收。"
         ),
-        "heat": 88,
         "skill_names": (
             "相机选型",
             "成像调试",
@@ -278,7 +274,6 @@ JOBS: tuple[dict[str, Any], ...] = (
             "理解缺陷定义与客户判定标准，把主观的判定变成客观、可复现的标注规则，并跑通一次"
             "训练流程。"
         ),
-        "heat": 74,
         "skill_names": (
             "图像基础",
             "图像滤波",
@@ -306,7 +301,6 @@ JOBS: tuple[dict[str, Any], ...] = (
             "视觉软件工具完成流程配置与参数调整，处理现场常见的图像质量与检测异常问题，配合"
             "后端团队定位并反馈问题。"
         ),
-        "heat": 136,
         "skill_names": (
             "光源选型",
             "镜头选型",
@@ -342,7 +336,6 @@ JOBS: tuple[dict[str, Any], ...] = (
             "判断一个现场问题属于光学成像、算法精度、机械电气还是通讯配置，给出初步分析与"
             "解决方案，并推动后端团队闭环解决。"
         ),
-        "heat": 124,
         "skill_names": (
             "光源选型",
             "相机选型",
@@ -384,7 +377,6 @@ JOBS: tuple[dict[str, Any], ...] = (
             "可行性评估、成像方案设计与硬件选型、成本与 BOM 测算，输出技术方案书并对风险点"
             "提前预警。"
         ),
-        "heat": 108,
         "skill_names": (
             "光源选型",
             "镜头选型",
@@ -413,7 +405,6 @@ JOBS: tuple[dict[str, Any], ...] = (
             "结果展示、数据存储与报表导出等功能，对接相机与硬件 SDK，输出稳定可维护的客户端"
             "程序。"
         ),
-        "heat": 130,
         "skill_names": (
             "相机选型",
             "图像基础",
@@ -988,6 +979,7 @@ async def run_growth_seed(
         "job_skills": 0,
         "projects": 0,
         "project_modules": 0,
+        "project_module_skills": 0,
         "project_skills": 0,
     }
 
@@ -999,6 +991,7 @@ async def run_growth_seed(
         templates = StageTemplateRepository(session)
         projects = TrainingProjectRepository(session)
         project_modules = ProjectModuleRepository(session)
+        module_skills = ProjectModuleSkillRepository(session)
         project_skills = ProjectSkillRepository(session)
 
         # ------------------------------------------------------------ 技能体系
@@ -1037,7 +1030,6 @@ async def run_growth_seed(
                         "recommended_level": item["recommended_level"],
                         "scene": item["scene"],
                         "description": item["description"],
-                        "heat": item["heat"],
                     }
                 )
                 stats["jobs"] += 1
@@ -1113,6 +1105,24 @@ async def run_growth_seed(
                 await project_skills.add_skill(project.id, node_id)
                 linked_nodes.add(node_id)
                 stats["project_skills"] += 1
+
+            # 关卡级技能绑定：把项目技能平铺到该项目下的每个关卡（技能点亮按关卡得分判定）
+            module_list = await project_modules.list_of_project(project.id)
+            if module_list:
+                existing_links = await module_skills.skill_node_ids_of_modules(
+                    [int(module.id) for module in module_list]
+                )
+                target_node_ids = [
+                    node_ids[node_name]
+                    for node_name in PROJECT_SKILLS.get(item["project_name"], ())
+                ]
+                for module in module_list:
+                    current = existing_links.get(int(module.id), [])
+                    merged = list(dict.fromkeys([*current, *target_node_ids]))
+                    if len(merged) == len(current):
+                        continue
+                    await module_skills.replace_skills(int(module.id), merged)
+                    stats["project_module_skills"] += len(merged) - len(current)
 
         await session.commit()
     finally:

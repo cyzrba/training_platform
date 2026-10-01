@@ -27,7 +27,8 @@ from app.models.account import (
     SysUser,
     SysUserRole,
 )
-from app.models.job_skill import GrowthRule
+from app.models.certification import CertificateRule, CertificateSkill
+from app.models.job_skill import GrowthRule, Job, JobSkill
 from app.models.project import ProjectStageTemplate
 from app.services.password import default_password_hash
 
@@ -363,6 +364,43 @@ async def run_seed(session: AsyncSession | None = None) -> dict[str, int]:
         # 岗位 / 技能体系 / 技能点 / 实训项目：底稿见 app/db/seed_growth.py
         for key, value in (await run_growth_seed(session)).items():
             stats[key] = stats.get(key, 0) + value
+
+        # 证书规则：每个岗位固定一张证书，所需技能点 = 该岗位关联的技能点（1:1，幂等）
+        jobs = list(
+            (
+                await session.exec(
+                    select(Job).where(Job.deleted_at.is_(None))  # type: ignore[attr-defined]
+                )
+            ).all()
+        )
+        for job in jobs:
+            existing_rule = (
+                await session.exec(
+                    select(CertificateRule).where(CertificateRule.job_id == job.id)
+                )
+            ).first()
+            if existing_rule is not None:
+                continue
+            skill_node_ids = [
+                int(node_id)
+                for node_id in (
+                    await session.exec(
+                        select(JobSkill.skill_node_id).where(JobSkill.job_id == job.id)
+                    )
+                ).all()
+            ]
+            rule = CertificateRule(
+                job_id=job.id,
+                cert_name=f"{job.job_name} 认证证书",
+                issue_org_name="人工智能本科学院",
+                status="ENABLED",
+                description=f"完成 {job.job_name} 所需全部技能并通过 AI 面试与人工审核后颁发。",
+            )
+            session.add(rule)
+            await session.flush()
+            for node_id in skill_node_ids:
+                session.add(CertificateSkill(certificate_rule_id=rule.id, skill_node_id=node_id))
+            stats["certificate_rules"] = stats.get("certificate_rules", 0) + 1
 
         for item in GROWTH_RULES:
             _, created = await _get_or_create(
